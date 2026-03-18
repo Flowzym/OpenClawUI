@@ -34,6 +34,9 @@ export function GatewayStatusCard() {
           <p className="section-title">Endpoint</p>
           <p className="mt-2 font-mono text-xs">{gateway.endpoint}</p>
           <p className="mt-2 text-xs text-app-muted">Data mode: {gateway.dataSource}</p>
+          {gateway.state === 'connecting' && gateway.dataSource === 'none' ? (
+            <p className="mt-1 text-xs text-app-muted">Previous endpoint snapshot cleared; waiting for current endpoint data.</p>
+          ) : null}
           {gateway.usingMockFallback ? <p className="mt-1 text-xs text-app-warn">Fallback mode active</p> : null}
         </div>
         <div className="panel-muted p-3">

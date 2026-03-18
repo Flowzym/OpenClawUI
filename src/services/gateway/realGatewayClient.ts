@@ -49,6 +49,7 @@ class RealGatewayClient implements GatewayClient {
 
   async connect(url: string) {
     const nextEndpoint = url || DEFAULT_ENDPOINT;
+    const previousEndpoint = this.endpoint;
     const endpointChanged = nextEndpoint !== this.endpoint;
     this.endpoint = nextEndpoint;
     this.snapshot.endpoint = this.endpoint;
@@ -66,6 +67,7 @@ class RealGatewayClient implements GatewayClient {
     if (endpointChanged) {
       this.clearReconnectTimer();
       await this.resetActiveSocket(`gateway endpoint changed to ${this.endpoint}`);
+      this.resetSnapshotForEndpointChange(previousEndpoint, this.endpoint);
     }
 
     if (
@@ -83,6 +85,7 @@ class RealGatewayClient implements GatewayClient {
       dataSource: this.snapshot.dataSource,
       protocolConfidence: this.snapshot.protocolConfidence,
       lastError: undefined,
+      replaceDiagnostics: !endpointChanged,
     });
 
     try {
@@ -348,6 +351,17 @@ class RealGatewayClient implements GatewayClient {
   }
 
   private applyEvent(event: GatewayEvent) {
+    if (
+      this.snapshot.handshakePhase !== 'ready' &&
+      (event.verificationSignal === 'explicit_ack' || event.verificationSignal === 'explicit_verified_flag')
+    ) {
+      this.promoteHandshakeReady(
+        event.verificationSignal === 'explicit_ack'
+          ? 'Verified gateway handshake acknowledgement observed.'
+          : 'Verified gateway protocol flag observed during initialization.',
+      );
+    }
+
     switch (event.type) {
       case 'connection':
         this.snapshot.connectionState = event.state;
@@ -363,12 +377,6 @@ class RealGatewayClient implements GatewayClient {
         }
         if (event.lastHeartbeat) {
           this.markHeartbeat(event.lastHeartbeat, event.latencyMs ?? null);
-        }
-        if (
-          this.snapshot.handshakePhase !== 'ready' &&
-          (event.verificationSignal === 'explicit_ack' || event.verificationSignal === 'explicit_verified_flag')
-        ) {
-          this.promoteHandshakeReady('Verified gateway connection event observed.');
         }
         break;
       case 'run':
@@ -483,6 +491,7 @@ class RealGatewayClient implements GatewayClient {
       handshakePhase?: HandshakePhase;
       dataSource?: GatewayDataSource;
       protocolConfidence?: GatewaySnapshot['protocolConfidence'];
+      replaceDiagnostics?: boolean;
     } = {},
   ) {
     this.snapshot.connectionState = state;
@@ -492,7 +501,7 @@ class RealGatewayClient implements GatewayClient {
     this.snapshot.lastError = options.lastError;
     this.snapshot.protocolConfidence = options.protocolConfidence ?? this.snapshot.protocolConfidence;
 
-    const diagnostics = [...this.snapshot.diagnostics];
+    const diagnostics = options.replaceDiagnostics ? [] : [...this.snapshot.diagnostics];
     if (options.lastError) {
       diagnostics.unshift(options.lastError);
     }
@@ -607,6 +616,49 @@ class RealGatewayClient implements GatewayClient {
       window.clearTimeout(this.handshakeTimer);
       this.handshakeTimer = null;
     }
+  }
+
+  private resetSnapshotForEndpointChange(previousEndpoint: string, nextEndpoint: string) {
+    this.resolveSessionRequests([]);
+    this.snapshot.sessions = [];
+    this.snapshot.currentRun = null;
+    this.snapshot.dataSource = 'none';
+    this.snapshot.usingMockFallback = false;
+    this.snapshot.lastHeartbeat = null;
+    this.snapshot.latencyMs = null;
+    this.snapshot.lastError = undefined;
+    this.snapshot.protocolConfidence = 'exploratory';
+    this.snapshot.handshakePhase = 'idle';
+    this.snapshot.diagnostics = [
+      `Endpoint switched from ${previousEndpoint} to ${nextEndpoint}.`,
+      'Cleared stale gateway snapshot for the previous endpoint; waiting for explicit handshake verification and fresh data.',
+      'Prior diagnostics/history from the previous endpoint are not treated as current status.',
+    ];
+
+    this.emit({
+      type: 'run',
+      run: null,
+      confidence: 'exploratory',
+    });
+    this.emit({
+      type: 'sessions_snapshot',
+      sessions: [],
+      source: 'none',
+      confidence: 'exploratory',
+    });
+    this.emit({
+      type: 'connection',
+      state: 'connecting',
+      handshakePhase: 'idle',
+      lastHeartbeat: null,
+      latencyMs: null,
+      diagnostics: this.snapshot.diagnostics,
+      usingMockFallback: false,
+      dataSource: 'none',
+      lastError: undefined,
+      confidence: 'exploratory',
+      protocolConfidence: 'exploratory',
+    });
   }
 
   private async resetActiveSocket(reason: string) {

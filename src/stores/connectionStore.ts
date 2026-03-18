@@ -94,6 +94,15 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         state: 'connecting',
         handshakePhase: 'idle',
         protocolConfidence: 'exploratory',
+        dataSource: 'none',
+        usingMockFallback: false,
+        lastHeartbeat: null,
+        latencyMs: null,
+        lastError: undefined,
+        diagnostics: [
+          `Preparing connection to ${endpoint}.`,
+          'Waiting for an explicit gateway handshake acknowledgement before treating the endpoint as ready.',
+        ],
       },
     }));
     await gatewayClient.connect(endpoint);

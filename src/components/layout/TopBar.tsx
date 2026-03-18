@@ -17,6 +17,14 @@ const surfaceBadge = {
 
 export function TopBar() {
   const { gateway, currentRun, activeAgent, activeModel } = useConnectionStore();
+  const endpointStatus =
+    gateway.state === 'connecting' && gateway.dataSource === 'none'
+      ? 'fresh snapshot pending'
+      : gateway.usingMockFallback
+        ? 'fallback snapshot'
+        : gateway.dataSource === 'gateway'
+          ? 'live snapshot'
+          : 'idle snapshot';
 
   return (
     <header className="sticky top-0 z-20 border-b border-app-border bg-app-panel/95 backdrop-blur">
@@ -29,6 +37,7 @@ export function TopBar() {
             </span>
             <span className="text-xs text-app-muted">{gateway.endpoint}</span>
           </div>
+          <p className="mt-2 text-[11px] text-app-muted">{endpointStatus}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${surfaceBadge[gateway.dataSource]}`}>
               source: {gateway.dataSource}
