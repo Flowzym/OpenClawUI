@@ -42,6 +42,7 @@ interface GatewayEventBase {
   confidence: ProtocolConfidence;
   raw?: unknown;
   note?: string;
+  verificationSignal?: 'explicit_ack' | 'explicit_verified_flag' | 'heartbeat';
 }
 
 export type GatewayEvent =
@@ -78,6 +79,8 @@ export type GatewayEvent =
       mode: 'replace' | 'append';
       source: GatewayDataSource;
       correlationId?: string;
+      clientRequestId?: string;
+      clientMessageId?: string;
     } & GatewayEventBase)
   | ({
       type: 'message_delta';
@@ -88,6 +91,8 @@ export type GatewayEvent =
       role: Message['role'];
       source: GatewayDataSource;
       correlationId?: string;
+      clientRequestId?: string;
+      clientMessageId?: string;
     } & GatewayEventBase)
   | ({
       type: 'tool_event';

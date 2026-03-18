@@ -1,6 +1,5 @@
 import { mockCurrentRun, mockGatewayStatus, mockLogs, mockSessions } from '../../data/mockData';
 import type { ConnectionState } from '../../types';
-import { createLogEntry } from './adapters';
 import type { GatewayClient } from './types';
 
 export const mockGatewayClient: GatewayClient = {

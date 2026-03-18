@@ -12,6 +12,8 @@ export function AppShell() {
   const theme = useSettingsStore((state) => state.settings.theme);
   const gatewayUrl = useSettingsStore((state) => state.settings.gatewayUrl);
   const initializeConnection = useConnectionStore((state) => state.initialize);
+  const connectGateway = useConnectionStore((state) => state.connect);
+  const disconnectGateway = useConnectionStore((state) => state.disconnect);
   const initializeSessions = useSessionStore((state) => state.initialize);
   const startLogStream = useLogsStore((state) => state.startStream);
 
@@ -21,7 +23,7 @@ export function AppShell() {
 
   useEffect(() => {
     const stopLogs = startLogStream();
-    const stopConnection = initializeConnection(gatewayUrl);
+    const stopConnection = initializeConnection();
     const stopSessions = initializeSessions();
 
     return () => {
@@ -29,7 +31,15 @@ export function AppShell() {
       stopConnection();
       stopLogs();
     };
-  }, [gatewayUrl, initializeConnection, initializeSessions, startLogStream]);
+  }, [initializeConnection, initializeSessions, startLogStream]);
+
+  useEffect(() => {
+    void connectGateway(gatewayUrl);
+  }, [connectGateway, gatewayUrl]);
+
+  useEffect(() => () => {
+    void disconnectGateway();
+  }, [disconnectGateway]);
 
   return (
     <div className="flex min-h-screen bg-app-bg text-app-text">

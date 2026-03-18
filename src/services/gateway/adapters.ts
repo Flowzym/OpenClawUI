@@ -13,22 +13,8 @@ interface ParseContext {
   confidence: ProtocolConfidence;
   note?: string;
   raw: unknown;
+  verificationSignal?: 'explicit_ack' | 'explicit_verified_flag' | 'heartbeat';
 }
-
-const VERIFIED_MESSAGE_EVENTS = new Set([
-  'log',
-  'heartbeat',
-  'pong',
-  'connection',
-  'connection_state',
-  'gateway_status',
-  'session_snapshot',
-  'sessions_snapshot',
-  'session_updated',
-  'session_message_delta',
-  'message_delta',
-  'tool_event',
-]);
 
 const asObject = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -53,12 +39,32 @@ const firstNumber = (record: Record<string, unknown>, keys: string[]): number | 
   return undefined;
 };
 
-const determineConfidence = (eventType: string, record: Record<string, unknown>): ProtocolConfidence => {
-  if (VERIFIED_MESSAGE_EVENTS.has(eventType)) return 'verified';
-  if ('protocol_verified' in record || 'verified' in record) {
-    return record.protocol_verified === true || record.verified === true ? 'verified' : 'exploratory';
+const determineVerification = (eventType: string, record: Record<string, unknown>) => {
+  if (eventType === 'heartbeat' || eventType === 'pong') {
+    return {
+      confidence: 'verified' as const,
+      verificationSignal: 'heartbeat' as const,
+    };
   }
-  return 'exploratory';
+
+  if (record.protocol_verified === true || record.verified === true) {
+    return {
+      confidence: 'verified' as const,
+      verificationSignal: 'explicit_verified_flag' as const,
+    };
+  }
+
+  if (['gateway_ready', 'handshake_ack', 'handshake_ready', 'ready'].includes(eventType)) {
+    return {
+      confidence: 'verified' as const,
+      verificationSignal: 'explicit_ack' as const,
+    };
+  }
+
+  return {
+    confidence: 'exploratory' as const,
+    verificationSignal: undefined,
+  };
 };
 
 const normalizeRunStatus = (value: unknown): RunStatus => {
@@ -254,6 +260,7 @@ const tryNormalizeConnectionEvent = (record: Record<string, unknown>, context: P
     note: context.note,
     raw: context.raw,
     protocolConfidence: context.confidence,
+    verificationSignal: context.verificationSignal,
   };
 };
 
@@ -265,6 +272,7 @@ const createRawDiagnostic = (context: ParseContext, summary: string): GatewayEve
   confidence: context.confidence,
   note: context.note,
   raw: context.raw,
+  verificationSignal: context.verificationSignal,
 });
 
 export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
@@ -283,8 +291,17 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
 
   const eventType = String(record.type ?? record.event ?? record.kind ?? '').toLowerCase();
   const payload = asObject(record.payload) ?? asObject(record.data) ?? record;
-  const confidence = determineConfidence(eventType, record);
-  const context: ParseContext = { confidence, raw, note: confidence === 'exploratory' ? 'Parsed through exploratory protocol heuristics.' : 'Matched a verified protocol shape.' };
+  const verification = determineVerification(eventType, record);
+  const confidence = verification.confidence;
+  const context: ParseContext = {
+    confidence,
+    raw,
+    verificationSignal: verification.verificationSignal,
+    note:
+      confidence === 'exploratory'
+        ? 'Parsed through exploratory protocol heuristics.'
+        : 'Matched an explicit protocol verification signal.',
+  };
 
   if (eventType === 'log') {
     const entry = tryNormalizeLog(record);
@@ -304,6 +321,7 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
         note: 'Heartbeat/pong signal received from gateway.',
         raw,
         protocolConfidence: 'verified',
+        verificationSignal: 'heartbeat',
       },
     ];
   }
@@ -338,6 +356,8 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   const sessionId = firstString(payload, ['session_id', 'sessionId']) ?? firstString(record, ['session_id', 'sessionId']);
   if (sessionId) {
     const correlationId = firstString(payload, ['client_request_id', 'clientRequestId', 'correlation_id', 'correlationId']);
+    const clientRequestId = firstString(payload, ['client_request_id', 'clientRequestId']);
+    const clientMessageId = firstString(payload, ['client_message_id', 'clientMessageId']);
 
     if (eventType === 'message_delta' || eventType === 'session_message_delta') {
       const delta = firstString(payload, ['delta', 'content_delta', 'contentDelta', 'chunk']);
@@ -353,9 +373,12 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
             role,
             source: 'gateway',
             correlationId,
+            clientRequestId,
+            clientMessageId,
             confidence,
             note: context.note,
             raw,
+            verificationSignal: context.verificationSignal,
           },
         ];
       }
@@ -392,9 +415,12 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
             mode: 'replace',
             source: 'gateway',
             correlationId,
+            clientRequestId,
+            clientMessageId,
             confidence,
             note: context.note,
             raw,
+            verificationSignal: context.verificationSignal,
           },
         ];
       }

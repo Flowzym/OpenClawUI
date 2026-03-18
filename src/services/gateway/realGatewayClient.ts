@@ -22,6 +22,7 @@ const isBrowser = typeof window !== 'undefined' && typeof window.WebSocket !== '
 
 class RealGatewayClient implements GatewayClient {
   private socket: WebSocket | null = null;
+  private socketEndpoint: string | null = null;
   private endpoint = DEFAULT_ENDPOINT;
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
@@ -47,7 +48,9 @@ class RealGatewayClient implements GatewayClient {
   };
 
   async connect(url: string) {
-    this.endpoint = url || DEFAULT_ENDPOINT;
+    const nextEndpoint = url || DEFAULT_ENDPOINT;
+    const endpointChanged = nextEndpoint !== this.endpoint;
+    this.endpoint = nextEndpoint;
     this.snapshot.endpoint = this.endpoint;
     this.manuallyDisconnected = false;
 
@@ -60,7 +63,16 @@ class RealGatewayClient implements GatewayClient {
       return this.snapshot.connectionState;
     }
 
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    if (endpointChanged) {
+      this.clearReconnectTimer();
+      await this.resetActiveSocket(`gateway endpoint changed to ${this.endpoint}`);
+    }
+
+    if (
+      this.socket &&
+      this.socketEndpoint === this.endpoint &&
+      (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
+    ) {
       return this.snapshot.connectionState;
     }
 
@@ -99,6 +111,7 @@ class RealGatewayClient implements GatewayClient {
     if (this.socket) {
       this.socket.close(1000, 'operator disconnect');
       this.socket = null;
+      this.socketEndpoint = null;
     }
 
     this.transitionConnection('disconnected', {
@@ -230,6 +243,7 @@ class RealGatewayClient implements GatewayClient {
       socket.onopen = () => {
         settled = true;
         this.socket = socket;
+        this.socketEndpoint = url;
         this.reconnectAttempt = 0;
         this.transitionConnection('connecting', {
           handshakePhase: 'socket_open',
@@ -257,6 +271,7 @@ class RealGatewayClient implements GatewayClient {
         this.stopHeartbeat();
         this.clearHandshakeTimer();
         this.socket = null;
+        this.socketEndpoint = null;
         const intentional = this.manuallyDisconnected || event.code === 1000;
         if (intentional) {
           this.transitionConnection('disconnected', {
@@ -349,16 +364,16 @@ class RealGatewayClient implements GatewayClient {
         if (event.lastHeartbeat) {
           this.markHeartbeat(event.lastHeartbeat, event.latencyMs ?? null);
         }
-        if (event.confidence === 'verified' && this.snapshot.handshakePhase !== 'ready') {
+        if (
+          this.snapshot.handshakePhase !== 'ready' &&
+          (event.verificationSignal === 'explicit_ack' || event.verificationSignal === 'explicit_verified_flag')
+        ) {
           this.promoteHandshakeReady('Verified gateway connection event observed.');
         }
         break;
       case 'run':
         this.snapshot.currentRun = event.run;
         this.setGatewayDataMode('gateway', event.confidence);
-        if (event.confidence === 'verified') {
-          this.promoteHandshakeReady('Verified run payload received.');
-        }
         if (event.run?.sessionId) {
           this.patchSession(event.run.sessionId, { status: event.run.status, updatedAt: new Date().toISOString() });
         }
@@ -367,16 +382,10 @@ class RealGatewayClient implements GatewayClient {
         this.snapshot.sessions = event.sessions;
         this.setGatewayDataMode(event.source, event.confidence);
         this.resolveSessionRequests(event.sessions);
-        if (event.confidence === 'verified') {
-          this.promoteHandshakeReady('Verified session snapshot received.');
-        }
         break;
       case 'session':
         this.upsertSession(event.session);
         this.setGatewayDataMode(event.source, event.confidence);
-        if (event.confidence === 'verified') {
-          this.promoteHandshakeReady('Verified session update received.');
-        }
         break;
       case 'message':
         this.upsertMessage(event.sessionId, event.message, event.mode);
@@ -600,6 +609,27 @@ class RealGatewayClient implements GatewayClient {
     }
   }
 
+  private async resetActiveSocket(reason: string) {
+    this.stopHeartbeat();
+    this.clearHandshakeTimer();
+
+    if (!this.socket) {
+      return;
+    }
+
+    const socket = this.socket;
+    this.socket = null;
+    this.socketEndpoint = null;
+
+    if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+      return;
+    }
+
+    this.manuallyDisconnected = true;
+    socket.close(1000, reason);
+    this.manuallyDisconnected = false;
+  }
+
   private mergeDiagnostics(next: string[]) {
     const merged = [...next, ...this.snapshot.diagnostics].filter((value, index, array) => value && array.indexOf(value) === index);
     return merged.slice(0, 10);
@@ -672,7 +702,9 @@ class RealGatewayClient implements GatewayClient {
       this.snapshot.usingMockFallback = true;
       this.snapshot.dataSource = 'fallback';
     }
-    this.snapshot.protocolConfidence = confidence ?? this.snapshot.protocolConfidence;
+    if (confidence === 'verified' || this.snapshot.protocolConfidence !== 'verified') {
+      this.snapshot.protocolConfidence = confidence ?? this.snapshot.protocolConfidence;
+    }
   }
 
   private upsertSession(session: Session) {
