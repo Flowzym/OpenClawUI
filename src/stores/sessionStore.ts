@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import { gatewayClient } from '../services/gateway';
 import type { GatewayEvent } from '../services/gateway/types';
-import type { Message, Session } from '../types';
+import type { Session } from '../types';
 
 interface PendingMessageCorrelation {
   clientRequestId: string;
+  clientMessageId: string;
   userMessageId: string;
   assistantPlaceholderId: string;
+  gatewayMessageId?: string;
   content: string;
   createdAt: string;
 }
@@ -38,8 +40,6 @@ const mergeSession = (sessions: Session[], next: Session) => {
   return sessions.map((session) => (session.id === next.id ? next : session));
 };
 
-const findFirstPending = (pending: Record<string, PendingMessageCorrelation[]>, sessionId: string) => pending[sessionId]?.[0];
-
 const removePending = (
   pending: Record<string, PendingMessageCorrelation[]>,
   sessionId: string,
@@ -55,6 +55,46 @@ const removePending = (
       item.userMessageId !== userMessageId,
   );
   return { ...pending, [sessionId]: nextQueue };
+};
+
+const updatePending = (
+  pending: Record<string, PendingMessageCorrelation[]>,
+  sessionId: string,
+  predicate: (item: PendingMessageCorrelation) => boolean,
+  updater: (item: PendingMessageCorrelation) => PendingMessageCorrelation,
+) => {
+  const queue = pending[sessionId] ?? [];
+  return {
+    ...pending,
+    [sessionId]: queue.map((item) => (predicate(item) ? updater(item) : item)),
+  };
+};
+
+interface PendingLookup {
+  correlationId?: string;
+  clientRequestId?: string;
+  clientMessageId?: string;
+  gatewayMessageId?: string;
+}
+
+const findBestPendingMatch = (
+  pending: Record<string, PendingMessageCorrelation[]>,
+  sessionId: string,
+  lookup: PendingLookup,
+) => {
+  const queue = pending[sessionId] ?? [];
+  if (queue.length === 0) return undefined;
+
+  const strategies: Array<(item: PendingMessageCorrelation) => boolean> = [
+    (item) => Boolean(lookup.correlationId && item.clientRequestId === lookup.correlationId),
+    (item) => Boolean(lookup.clientRequestId && item.clientRequestId === lookup.clientRequestId),
+    (item) => Boolean(lookup.clientMessageId && item.clientMessageId === lookup.clientMessageId),
+    (item) => Boolean(lookup.gatewayMessageId && item.gatewayMessageId === lookup.gatewayMessageId),
+  ];
+
+  return strategies
+    .map((strategy) => queue.find(strategy))
+    .find((item): item is PendingMessageCorrelation => Boolean(item));
 };
 
 const reconcileIncomingMessage = (
@@ -118,7 +158,12 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
       break;
     case 'message':
       set((state) => {
-        const pending = findFirstPending(state.pendingCorrelations, event.sessionId);
+        const pending = findBestPendingMatch(state.pendingCorrelations, event.sessionId, {
+          correlationId: event.correlationId,
+          clientRequestId: event.clientRequestId,
+          clientMessageId: event.clientMessageId,
+          gatewayMessageId: event.message.id,
+        });
         let resolvedUser = false;
         let resolvedAssistant = false;
 
@@ -145,6 +190,13 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
               resolvedAssistant ? pending?.assistantPlaceholderId : undefined,
               resolvedUser ? pending?.userMessageId : undefined,
             )
+          : pending && event.message.role === 'assistant'
+            ? updatePending(
+                state.pendingCorrelations,
+                event.sessionId,
+                (item) => item.clientRequestId === pending.clientRequestId,
+                (item) => ({ ...item, gatewayMessageId: event.message.id }),
+              )
           : state.pendingCorrelations;
 
         return {
@@ -157,7 +209,12 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
       break;
     case 'message_delta':
       set((state) => {
-        const pending = findFirstPending(state.pendingCorrelations, event.sessionId);
+        const pending = findBestPendingMatch(state.pendingCorrelations, event.sessionId, {
+          correlationId: event.correlationId,
+          clientRequestId: event.clientRequestId,
+          clientMessageId: event.clientMessageId,
+          gatewayMessageId: event.messageId,
+        });
         let didResolvePlaceholder = false;
         const sessions = state.sessions.map((session) => {
           if (session.id !== event.sessionId) return session;
@@ -206,6 +263,13 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
           sessions,
           pendingCorrelations: didResolvePlaceholder
             ? removePending(state.pendingCorrelations, event.sessionId, pending?.clientRequestId, pending?.assistantPlaceholderId)
+            : pending
+              ? updatePending(
+                  state.pendingCorrelations,
+                  event.sessionId,
+                  (item) => item.clientRequestId === pending.clientRequestId,
+                  (item) => ({ ...item, gatewayMessageId: event.messageId }),
+                )
             : state.pendingCorrelations,
           dataSource: event.source,
           protocolConfidence: event.confidence ?? state.protocolConfidence,
@@ -273,7 +337,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const dispose = gatewayClient.subscribeEvents((event) => applyEvent(event, get, set));
     set({ initialized: true });
     void get().loadSessions();
-    return dispose;
+
+    let cleanedUp = false;
+    return () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      dispose();
+      set({ initialized: false });
+    };
   },
   selectSession(id) {
     set((state) => ({
@@ -326,6 +397,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const userMessageId = `local-user-${Date.now()}`;
     const assistantPlaceholderId = `local-assistant-${Date.now()}`;
     const clientRequestId = `local-request-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const clientMessageId = userMessageId;
 
     set((state) => ({
       error: undefined,
@@ -333,7 +405,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ...state.pendingCorrelations,
         [sessionId]: [
           ...(state.pendingCorrelations[sessionId] ?? []),
-          { clientRequestId, userMessageId, assistantPlaceholderId, content: trimmed, createdAt: timestamp },
+          { clientRequestId, clientMessageId, userMessageId, assistantPlaceholderId, content: trimmed, createdAt: timestamp },
         ],
       },
       sessions: state.sessions.map((session) =>
@@ -369,7 +441,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessionId,
         content: trimmed,
         clientRequestId,
-        clientMessageId: userMessageId,
+        clientMessageId,
         assistantPlaceholderId,
       });
     } catch (error) {

@@ -30,7 +30,10 @@ export const useLogsStore = create<LogsStore>((set, get) => ({
       set({ logs: [entry, ...get().logs].slice(0, 200) });
     });
     set({ streamStarted: true });
+    let cleanedUp = false;
     return () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       dispose();
       set({ streamStarted: false });
     };

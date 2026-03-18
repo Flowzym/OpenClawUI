@@ -15,7 +15,7 @@ interface ConnectionStore {
   activeAgent: string;
   activeModel: string;
   initialized: boolean;
-  initialize: (url?: string) => () => void;
+  initialize: () => () => void;
   connect: (url?: string) => Promise<void>;
   disconnect: () => Promise<void>;
   refreshRun: () => Promise<void>;
@@ -69,16 +69,21 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   activeAgent: 'none',
   activeModel: 'none',
   initialized: false,
-  initialize(url) {
-    if (!get().initialized) {
-      const dispose = gatewayClient.subscribeEvents((event) => applyGatewayEvent(event, set));
-      set({ initialized: true });
-      void get().connect(url ?? get().gateway.endpoint);
-      return dispose;
+  initialize() {
+    if (get().initialized) {
+      return () => undefined;
     }
 
-    void get().connect(url ?? get().gateway.endpoint);
-    return () => undefined;
+    const dispose = gatewayClient.subscribeEvents((event) => applyGatewayEvent(event, set));
+    set({ initialized: true });
+
+    let cleanedUp = false;
+    return () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      dispose();
+      set({ initialized: false });
+    };
   },
   async connect(url) {
     const endpoint = url ?? get().gateway.endpoint;
@@ -88,6 +93,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         endpoint,
         state: 'connecting',
         handshakePhase: 'idle',
+        protocolConfidence: 'exploratory',
       },
     }));
     await gatewayClient.connect(endpoint);
