@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply m-0 min-h-screen bg-app-bg font-sans text-sm text-app-text antialiased;
+}
+
+* {
+  scrollbar-color: #3c4a63 #121826;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121826;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3c4a63;
+  border-radius: 9999px;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-app-border bg-app-panel shadow-panel;
+  }
+
+  .panel-muted {
+    @apply rounded-lg border border-app-border bg-app-panelAlt;
+  }
+
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-[0.18em] text-app-muted;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-app-border bg-app-bg px-3 py-2 text-sm text-app-text outline-none transition focus:border-app-accent;
+  }
+
+  .button-primary {
+    @apply inline-flex items-center justify-center rounded-md bg-app-accent px-3 py-2 text-sm font-medium text-white transition hover:brightness-110;
+  }
+
+  .button-secondary {
+    @apply inline-flex items-center justify-center rounded-md border border-app-border bg-app-panelAlt px-3 py-2 text-sm font-medium text-app-text transition hover:border-app-accent;
+  }
+
+  .button-danger {
+    @apply inline-flex items-center justify-center rounded-md border border-app-danger/50 bg-app-danger/10 px-3 py-2 text-sm font-medium text-app-danger transition hover:bg-app-danger/20;
+  }
+}
