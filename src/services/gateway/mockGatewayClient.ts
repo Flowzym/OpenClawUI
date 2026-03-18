@@ -5,21 +5,14 @@ import type { GatewayClient } from './types';
 
 export const mockGatewayClient: GatewayClient = {
   async connect() {
-    // TODO: Replace mock connection handshake with a real WebSocket client for the OpenClaw gateway.
     return 'connected' satisfies ConnectionState;
   },
-  async disconnect() {
-    // TODO: Replace mock disconnect handling with gateway socket teardown and cleanup.
-  },
-  async stopRun() {
-    // TODO: Replace mock stop action with a real gateway abort/stop command.
-  },
+  async disconnect() {},
+  async stopRun() {},
   async listSessions() {
-    // TODO: Replace mock session listing with real gateway-backed session retrieval.
     return mockSessions;
   },
   subscribeLogs(callback) {
-    // TODO: Replace mock log subscription with gateway event stream listeners.
     const timer = window.setInterval(() => {
       const entry = mockLogs[Math.floor(Math.random() * mockLogs.length)];
       callback({ ...entry, id: `${entry.id}-${Date.now()}`, timestamp: new Date().toISOString() });
@@ -28,36 +21,48 @@ export const mockGatewayClient: GatewayClient = {
     return () => window.clearInterval(timer);
   },
   async getCurrentRun() {
-    // TODO: Replace mock current run lookup with gateway status polling or push updates.
     return mockCurrentRun;
   },
   subscribeEvents(callback) {
     callback({
       type: 'connection',
       state: 'connected',
+      handshakePhase: 'ready',
       lastHeartbeat: mockGatewayStatus.lastHeartbeat,
       latencyMs: mockGatewayStatus.latencyMs,
-      diagnostics: mockGatewayStatus.diagnostics,
+      diagnostics: ['Mock gateway client active.'],
       usingMockFallback: true,
+      dataSource: 'fallback',
+      confidence: 'exploratory',
+      protocolConfidence: 'exploratory',
     });
-    callback({ type: 'run', run: mockCurrentRun });
-    callback({ type: 'sessions_snapshot', sessions: mockSessions, source: 'mock' });
+    callback({ type: 'run', run: mockCurrentRun, confidence: 'exploratory' });
+    callback({ type: 'sessions_snapshot', sessions: mockSessions, source: 'fallback', confidence: 'exploratory' });
     return () => undefined;
   },
   async sendMessage(input) {
-    return { sessionId: input.sessionId ?? mockSessions[0]?.id ?? 'mock-session', messageId: `mock-${Date.now()}` };
+    return {
+      sessionId: input.sessionId ?? mockSessions[0]?.id ?? 'mock-session',
+      messageId: `mock-${Date.now()}`,
+      clientRequestId: input.clientRequestId,
+      clientMessageId: input.clientMessageId,
+      assistantPlaceholderId: input.assistantPlaceholderId,
+    };
   },
   getSnapshot() {
     return {
       connectionState: 'connected',
+      handshakePhase: 'ready',
       currentRun: mockCurrentRun,
       sessions: mockSessions,
+      dataSource: 'fallback',
       usingMockFallback: true,
       lastHeartbeat: mockGatewayStatus.lastHeartbeat,
       latencyMs: mockGatewayStatus.latencyMs,
       endpoint: mockGatewayStatus.endpoint,
-      diagnostics: mockGatewayStatus.diagnostics,
+      diagnostics: ['Mock gateway client active.'],
       lastError: undefined,
+      protocolConfidence: 'exploratory',
     };
   },
 };

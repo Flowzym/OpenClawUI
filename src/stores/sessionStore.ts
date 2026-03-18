@@ -1,8 +1,15 @@
 import { create } from 'zustand';
-import { mockSessions } from '../data/mockData';
 import { gatewayClient } from '../services/gateway';
 import type { GatewayEvent } from '../services/gateway/types';
 import type { Message, Session } from '../types';
+
+interface PendingMessageCorrelation {
+  clientRequestId: string;
+  userMessageId: string;
+  assistantPlaceholderId: string;
+  content: string;
+  createdAt: string;
+}
 
 interface SessionStore {
   sessions: Session[];
@@ -11,8 +18,10 @@ interface SessionStore {
   virtualWindow: { start: number; end: number };
   initialized: boolean;
   isLoading: boolean;
-  isUsingFallback: boolean;
+  dataSource: 'gateway' | 'fallback' | 'none';
+  protocolConfidence: 'verified' | 'exploratory';
   error?: string;
+  pendingCorrelations: Record<string, PendingMessageCorrelation[]>;
   initialize: () => () => void;
   selectSession: (id: string) => void;
   setSearchTerm: (value: string) => void;
@@ -29,6 +38,64 @@ const mergeSession = (sessions: Session[], next: Session) => {
   return sessions.map((session) => (session.id === next.id ? next : session));
 };
 
+const findFirstPending = (pending: Record<string, PendingMessageCorrelation[]>, sessionId: string) => pending[sessionId]?.[0];
+
+const removePending = (
+  pending: Record<string, PendingMessageCorrelation[]>,
+  sessionId: string,
+  clientRequestId?: string,
+  assistantPlaceholderId?: string,
+  userMessageId?: string,
+) => {
+  const queue = pending[sessionId] ?? [];
+  const nextQueue = queue.filter(
+    (item) =>
+      item.clientRequestId !== clientRequestId &&
+      item.assistantPlaceholderId !== assistantPlaceholderId &&
+      item.userMessageId !== userMessageId,
+  );
+  return { ...pending, [sessionId]: nextQueue };
+};
+
+const reconcileIncomingMessage = (
+  session: Session,
+  event: Extract<GatewayEvent, { type: 'message' }>,
+  pending: PendingMessageCorrelation | undefined,
+) => {
+  const nextMessages = [...session.messages];
+
+  if (event.message.role === 'user' && pending) {
+    const optimisticIndex = nextMessages.findIndex((message) => message.id === pending.userMessageId);
+    if (optimisticIndex >= 0 && nextMessages[optimisticIndex].content === pending.content) {
+      nextMessages[optimisticIndex] = { ...event.message };
+      return { nextMessages, resolvedUser: true, resolvedAssistant: false };
+    }
+  }
+
+  if (event.message.role === 'assistant' && pending) {
+    const placeholderIndex = nextMessages.findIndex((message) => message.id === pending.assistantPlaceholderId);
+    if (placeholderIndex >= 0) {
+      nextMessages[placeholderIndex] = {
+        ...nextMessages[placeholderIndex],
+        ...event.message,
+        content: event.message.content || nextMessages[placeholderIndex].content,
+      };
+      return { nextMessages, resolvedUser: false, resolvedAssistant: true };
+    }
+  }
+
+  const existingIndex = nextMessages.findIndex((message) => message.id === event.message.id);
+  if (existingIndex >= 0) {
+    nextMessages[existingIndex] = event.mode === 'append'
+      ? { ...nextMessages[existingIndex], content: `${nextMessages[existingIndex].content}${event.message.content}`, streaming: event.message.streaming }
+      : { ...nextMessages[existingIndex], ...event.message };
+  } else {
+    nextMessages.push(event.message);
+  }
+
+  return { nextMessages, resolvedUser: false, resolvedAssistant: false };
+};
+
 const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater: (state: SessionStore) => Partial<SessionStore>) => void) => {
   switch (event.type) {
     case 'sessions_snapshot':
@@ -36,7 +103,8 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
         sessions: event.sessions,
         selectedSessionId: state.selectedSessionId || event.sessions[0]?.id || '',
         isLoading: false,
-        isUsingFallback: event.source === 'mock',
+        dataSource: event.source,
+        protocolConfidence: event.confidence ?? state.protocolConfidence,
         error: undefined,
       }));
       break;
@@ -44,40 +112,59 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
       set((state) => ({
         sessions: mergeSession(state.sessions, event.session),
         selectedSessionId: state.selectedSessionId || event.session.id,
-        isUsingFallback: event.source === 'mock' ? state.isUsingFallback : false,
+        dataSource: event.source === 'fallback' ? state.dataSource : event.source,
+        protocolConfidence: event.confidence ?? state.protocolConfidence,
       }));
       break;
     case 'message':
-      set((state) => ({
-        sessions: state.sessions.map((session) => {
+      set((state) => {
+        const pending = findFirstPending(state.pendingCorrelations, event.sessionId);
+        let resolvedUser = false;
+        let resolvedAssistant = false;
+
+        const sessions = state.sessions.map((session) => {
           if (session.id !== event.sessionId) return session;
-          const existingIndex = session.messages.findIndex((message) => message.id === event.message.id);
-          const nextMessages = [...session.messages];
-          if (existingIndex >= 0) {
-            nextMessages[existingIndex] = event.mode === 'append'
-              ? { ...nextMessages[existingIndex], content: `${nextMessages[existingIndex].content}${event.message.content}`, streaming: event.message.streaming }
-              : { ...nextMessages[existingIndex], ...event.message };
-          } else {
-            nextMessages.push(event.message);
-          }
+          const reconciled = reconcileIncomingMessage(session, event, pending);
+          resolvedUser = reconciled.resolvedUser;
+          resolvedAssistant = reconciled.resolvedAssistant;
           return {
             ...session,
-            messages: nextMessages,
+            messages: reconciled.nextMessages,
             preview: event.message.content || session.preview,
             updatedAt: event.message.timestamp,
             unreadCount:
               get().selectedSessionId === session.id || event.message.role === 'user' ? session.unreadCount : session.unreadCount + 1,
           };
-        }),
-        isUsingFallback: event.source === 'mock' ? state.isUsingFallback : false,
-      }));
+        });
+
+        const nextPending = resolvedUser || resolvedAssistant
+          ? removePending(
+              state.pendingCorrelations,
+              event.sessionId,
+              pending?.clientRequestId,
+              resolvedAssistant ? pending?.assistantPlaceholderId : undefined,
+              resolvedUser ? pending?.userMessageId : undefined,
+            )
+          : state.pendingCorrelations;
+
+        return {
+          sessions,
+          pendingCorrelations: nextPending,
+          dataSource: event.source,
+          protocolConfidence: event.confidence ?? state.protocolConfidence,
+        };
+      });
       break;
     case 'message_delta':
-      set((state) => ({
-        sessions: state.sessions.map((session) => {
+      set((state) => {
+        const pending = findFirstPending(state.pendingCorrelations, event.sessionId);
+        let didResolvePlaceholder = false;
+        const sessions = state.sessions.map((session) => {
           if (session.id !== event.sessionId) return session;
-          const existingIndex = session.messages.findIndex((message) => message.id === event.messageId);
           const nextMessages = [...session.messages];
+          const existingIndex = nextMessages.findIndex((message) => message.id === event.messageId);
+          const placeholderIndex = pending ? nextMessages.findIndex((message) => message.id === pending.assistantPlaceholderId) : -1;
+
           if (existingIndex >= 0) {
             nextMessages[existingIndex] = {
               ...nextMessages[existingIndex],
@@ -85,6 +172,16 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
               timestamp: event.timestamp,
               streaming: true,
             };
+          } else if (placeholderIndex >= 0) {
+            nextMessages[placeholderIndex] = {
+              ...nextMessages[placeholderIndex],
+              id: event.messageId,
+              role: event.role,
+              content: `${nextMessages[placeholderIndex].content}${event.delta}`,
+              timestamp: event.timestamp,
+              streaming: true,
+            };
+            didResolvePlaceholder = true;
           } else {
             nextMessages.push({
               id: event.messageId,
@@ -94,17 +191,26 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
               streaming: true,
             });
           }
+
           return {
             ...session,
-            status: 'running',
+            status: 'running' as const,
             messages: nextMessages,
             preview: nextMessages[nextMessages.length - 1]?.content ?? session.preview,
             updatedAt: event.timestamp,
             unreadCount: get().selectedSessionId === session.id ? session.unreadCount : session.unreadCount + 1,
           };
-        }),
-        isUsingFallback: event.source === 'mock' ? state.isUsingFallback : false,
-      }));
+        });
+
+        return {
+          sessions,
+          pendingCorrelations: didResolvePlaceholder
+            ? removePending(state.pendingCorrelations, event.sessionId, pending?.clientRequestId, pending?.assistantPlaceholderId)
+            : state.pendingCorrelations,
+          dataSource: event.source,
+          protocolConfidence: event.confidence ?? state.protocolConfidence,
+        };
+      });
       break;
     case 'tool_event':
       set((state) => ({
@@ -126,7 +232,8 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
             updatedAt: event.toolEvent.timestamp,
           };
         }),
-        isUsingFallback: event.source === 'mock' ? state.isUsingFallback : false,
+        dataSource: event.source,
+        protocolConfidence: event.confidence ?? state.protocolConfidence,
       }));
       break;
     case 'run':
@@ -151,14 +258,16 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
 };
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
-  sessions: mockSessions,
-  selectedSessionId: mockSessions[0]?.id ?? '',
+  sessions: [],
+  selectedSessionId: '',
   searchTerm: '',
   virtualWindow: { start: 0, end: 50 },
   initialized: false,
   isLoading: false,
-  isUsingFallback: true,
+  dataSource: 'none',
+  protocolConfidence: 'exploratory',
   error: undefined,
+  pendingCorrelations: {},
   initialize() {
     if (get().initialized) return () => undefined;
     const dispose = gatewayClient.subscribeEvents((event) => applyEvent(event, get, set));
@@ -214,9 +323,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
 
     const timestamp = new Date().toISOString();
-    const optimisticMessageId = `local-user-${Date.now()}`;
+    const userMessageId = `local-user-${Date.now()}`;
+    const assistantPlaceholderId = `local-assistant-${Date.now()}`;
+    const clientRequestId = `local-request-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     set((state) => ({
       error: undefined,
+      pendingCorrelations: {
+        ...state.pendingCorrelations,
+        [sessionId]: [
+          ...(state.pendingCorrelations[sessionId] ?? []),
+          { clientRequestId, userMessageId, assistantPlaceholderId, content: trimmed, createdAt: timestamp },
+        ],
+      },
       sessions: state.sessions.map((session) =>
         session.id === sessionId
           ? {
@@ -227,13 +346,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               messages: [
                 ...session.messages,
                 {
-                  id: optimisticMessageId,
+                  id: userMessageId,
                   role: 'user',
                   content: trimmed,
                   timestamp,
                 },
                 {
-                  id: `local-stream-${Date.now()}`,
+                  id: assistantPlaceholderId,
                   role: 'assistant',
                   content: '',
                   timestamp,
@@ -246,15 +365,25 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }));
 
     try {
-      await gatewayClient.sendMessage({ sessionId, content: trimmed });
+      await gatewayClient.sendMessage({
+        sessionId,
+        content: trimmed,
+        clientRequestId,
+        clientMessageId: userMessageId,
+        assistantPlaceholderId,
+      });
     } catch (error) {
       set((state) => ({
         error: error instanceof Error ? error.message : 'Failed to send message to the gateway.',
+        pendingCorrelations: removePending(state.pendingCorrelations, sessionId, clientRequestId, assistantPlaceholderId, userMessageId),
         sessions: state.sessions.map((session) =>
           session.id === sessionId
             ? {
                 ...session,
                 status: 'error',
+                messages: session.messages.map((message) =>
+                  message.id === assistantPlaceholderId ? { ...message, streaming: false, content: 'Send failed before gateway acknowledgement.' } : message,
+                ),
               }
             : session,
         ),
@@ -265,11 +394,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ isLoading: true, error: undefined });
     try {
       const sessions = await gatewayClient.listSessions();
+      const snapshot = gatewayClient.getSnapshot();
       set((state) => ({
         sessions,
         selectedSessionId: state.selectedSessionId || sessions[0]?.id || '',
         isLoading: false,
-        isUsingFallback: gatewayClient.getSnapshot().usingMockFallback,
+        dataSource: snapshot.dataSource,
+        protocolConfidence: snapshot.protocolConfidence,
       }));
     } catch (error) {
       set({

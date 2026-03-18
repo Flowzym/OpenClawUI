@@ -16,10 +16,12 @@ export const statusTone = (status: string) => {
     case 'connecting':
     case 'running':
     case 'syncing':
+    case 'degraded':
     case 'warn':
       return 'text-app-warn';
     case 'error':
     case 'deleted':
+    case 'failed':
       return 'text-app-danger';
     default:
       return 'text-app-muted';
@@ -35,9 +37,11 @@ export const statusBadge = (status: string) => {
     case 'connecting':
     case 'running':
     case 'syncing':
+    case 'degraded':
       return 'bg-app-warn/10 text-app-warn border-app-warn/40';
     case 'error':
     case 'deleted':
+    case 'failed':
       return 'bg-app-danger/10 text-app-danger border-app-danger/40';
     default:
       return 'bg-app-panelAlt text-app-muted border-app-border';

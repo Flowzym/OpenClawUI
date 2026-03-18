@@ -3,7 +3,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 
 export function MessageComposer() {
   const [value, setValue] = useState('');
-  const { selectedSessionId, sendMessage, error, isUsingFallback } = useSessionStore();
+  const { selectedSessionId, sendMessage, error, dataSource } = useSessionStore();
 
   return (
     <div className="panel mt-3">
@@ -19,7 +19,8 @@ export function MessageComposer() {
             <p className="text-xs text-app-muted">
               {selectedSessionId ? `Sending through the configured gateway for session ${selectedSessionId}.` : 'Select a session to send through the gateway.'}
             </p>
-            {isUsingFallback ? <p className="text-xs text-app-warn">Gateway fallback is active; messages may remain local until the protocol is verified.</p> : null}
+            {dataSource === 'fallback' ? <p className="text-xs text-app-warn">Gateway fallback is active; messages may remain local until the protocol is verified.</p> : null}
+            {dataSource === 'none' ? <p className="text-xs text-app-muted">No gateway session data has been received yet.</p> : null}
             {error ? <p className="text-xs text-app-danger">{error}</p> : null}
           </div>
           <button

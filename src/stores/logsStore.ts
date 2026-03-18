@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { mockLogs } from '../data/mockData';
 import { gatewayClient } from '../services/gateway';
 import type { LogEntry, LogLevel } from '../types';
 
@@ -13,16 +12,16 @@ interface LogsStore {
 }
 
 export const useLogsStore = create<LogsStore>((set, get) => ({
-  logs: mockLogs,
+  logs: [],
   filters: {
     info: true,
     warn: true,
     error: true,
   },
   diagnostics: [
-    'Windows host is expected to reach 127.0.0.1:18789.',
-    'Logs include both real gateway events and locally generated fallback diagnostics.',
-    'Protocol parsing failures are surfaced here for operator troubleshooting.',
+    'Structured logs now include handshake notices, parse failures, fallback activation reasons, and preserved unknown raw gateway events.',
+    'No mock logs are injected by default; logs begin empty until the gateway or local diagnostics produce entries.',
+    'Protocol uncertainty is carried as explicit diagnostic text instead of being silently normalized away.',
   ],
   streamStarted: false,
   startStream() {
