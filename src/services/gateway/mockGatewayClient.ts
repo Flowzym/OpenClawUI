@@ -1,5 +1,6 @@
-import { mockCurrentRun, mockLogs, mockSessions } from '../../data/mockData';
+import { mockCurrentRun, mockGatewayStatus, mockLogs, mockSessions } from '../../data/mockData';
 import type { ConnectionState } from '../../types';
+import { createLogEntry } from './adapters';
 import type { GatewayClient } from './types';
 
 export const mockGatewayClient: GatewayClient = {
@@ -29,5 +30,34 @@ export const mockGatewayClient: GatewayClient = {
   async getCurrentRun() {
     // TODO: Replace mock current run lookup with gateway status polling or push updates.
     return mockCurrentRun;
+  },
+  subscribeEvents(callback) {
+    callback({
+      type: 'connection',
+      state: 'connected',
+      lastHeartbeat: mockGatewayStatus.lastHeartbeat,
+      latencyMs: mockGatewayStatus.latencyMs,
+      diagnostics: mockGatewayStatus.diagnostics,
+      usingMockFallback: true,
+    });
+    callback({ type: 'run', run: mockCurrentRun });
+    callback({ type: 'sessions_snapshot', sessions: mockSessions, source: 'mock' });
+    return () => undefined;
+  },
+  async sendMessage(input) {
+    return { sessionId: input.sessionId ?? mockSessions[0]?.id ?? 'mock-session', messageId: `mock-${Date.now()}` };
+  },
+  getSnapshot() {
+    return {
+      connectionState: 'connected',
+      currentRun: mockCurrentRun,
+      sessions: mockSessions,
+      usingMockFallback: true,
+      lastHeartbeat: mockGatewayStatus.lastHeartbeat,
+      latencyMs: mockGatewayStatus.latencyMs,
+      endpoint: mockGatewayStatus.endpoint,
+      diagnostics: mockGatewayStatus.diagnostics,
+      lastError: undefined,
+    };
   },
 };

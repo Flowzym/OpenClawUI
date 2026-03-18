@@ -1,3 +1,3 @@
-import { mockGatewayClient } from './mockGatewayClient';
+import { realGatewayClient } from './realGatewayClient';
 
-export const gatewayClient = mockGatewayClient;
+export const gatewayClient = realGatewayClient;

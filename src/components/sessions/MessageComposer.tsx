@@ -3,7 +3,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 
 export function MessageComposer() {
   const [value, setValue] = useState('');
-  const { selectedSessionId, appendDraftReply } = useSessionStore();
+  const { selectedSessionId, sendMessage, error, isUsingFallback } = useSessionStore();
 
   return (
     <div className="panel mt-3">
@@ -15,13 +15,20 @@ export function MessageComposer() {
           placeholder="Compose operator prompt, instruction, or follow-up..."
         />
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-app-muted">Mock composer only. TODO: send prompts through the real gateway client.</p>
+          <div className="space-y-1">
+            <p className="text-xs text-app-muted">
+              {selectedSessionId ? `Sending through the configured gateway for session ${selectedSessionId}.` : 'Select a session to send through the gateway.'}
+            </p>
+            {isUsingFallback ? <p className="text-xs text-app-warn">Gateway fallback is active; messages may remain local until the protocol is verified.</p> : null}
+            {error ? <p className="text-xs text-app-danger">{error}</p> : null}
+          </div>
           <button
             type="button"
             className="button-primary"
+            disabled={!selectedSessionId || !value.trim()}
             onClick={() => {
               if (!value.trim()) return;
-              appendDraftReply(selectedSessionId, value.trim());
+              void sendMessage(value.trim());
               setValue('');
             }}
           >

@@ -27,6 +27,7 @@ export function GatewayStatusCard() {
           <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusBadge(gateway.state)}`}>
             {gateway.state}
           </span>
+          {gateway.usingMockFallback ? <p className="mt-2 text-xs text-app-muted">Mock fallback active</p> : null}
         </div>
         <div className="panel-muted p-3">
           <p className="section-title">Endpoint</p>
@@ -41,6 +42,11 @@ export function GatewayStatusCard() {
           <p className="mt-2 text-sm">{formatDateTime(gateway.lastHeartbeat)}</p>
         </div>
       </div>
+      {gateway.lastError ? (
+        <div className="mt-4 rounded-md border border-app-danger/40 bg-app-danger/10 px-3 py-3 text-sm text-app-danger">
+          {gateway.lastError}
+        </div>
+      ) : null}
       <div className="mt-4 space-y-2">
         <p className="section-title">Diagnostics</p>
         <ul className="space-y-2 text-sm text-app-muted">
