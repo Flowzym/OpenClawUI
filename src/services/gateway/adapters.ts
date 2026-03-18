@@ -1,5 +1,5 @@
 import type { LogEntry, Message, RunInfo, RunStatus, Session, SessionMetadata, ToolEvent } from '../../types';
-import type { GatewayEvent } from './types';
+import type { GatewayEvent, ProtocolConfidence } from './types';
 
 const DEFAULT_METADATA: SessionMetadata = {
   agent: 'unknown',
@@ -8,6 +8,27 @@ const DEFAULT_METADATA: SessionMetadata = {
   cwd: 'unknown',
   branch: 'unknown',
 };
+
+interface ParseContext {
+  confidence: ProtocolConfidence;
+  note?: string;
+  raw: unknown;
+}
+
+const VERIFIED_MESSAGE_EVENTS = new Set([
+  'log',
+  'heartbeat',
+  'pong',
+  'connection',
+  'connection_state',
+  'gateway_status',
+  'session_snapshot',
+  'sessions_snapshot',
+  'session_updated',
+  'session_message_delta',
+  'message_delta',
+  'tool_event',
+]);
 
 const asObject = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -32,6 +53,14 @@ const firstNumber = (record: Record<string, unknown>, keys: string[]): number | 
   return undefined;
 };
 
+const determineConfidence = (eventType: string, record: Record<string, unknown>): ProtocolConfidence => {
+  if (VERIFIED_MESSAGE_EVENTS.has(eventType)) return 'verified';
+  if ('protocol_verified' in record || 'verified' in record) {
+    return record.protocol_verified === true || record.verified === true ? 'verified' : 'exploratory';
+  }
+  return 'exploratory';
+};
+
 const normalizeRunStatus = (value: unknown): RunStatus => {
   switch (String(value ?? '').toLowerCase()) {
     case 'running':
@@ -50,15 +79,15 @@ const normalizeRunStatus = (value: unknown): RunStatus => {
   }
 };
 
-const normalizeRole = (value: unknown): Message['role'] => {
+const normalizeRole = (value: unknown): Message['role'] | null => {
   switch (String(value ?? '').toLowerCase()) {
     case 'system':
     case 'user':
     case 'assistant':
     case 'tool':
-      return value as Message['role'];
+      return String(value).toLowerCase() as Message['role'];
     default:
-      return 'assistant';
+      return null;
   }
 };
 
@@ -86,6 +115,18 @@ export const createLogEntry = (level: LogEntry['level'], source: string, message
   timestamp: new Date().toISOString(),
 });
 
+export const summarizeRawPayload = (value: unknown) => {
+  if (typeof value === 'string') {
+    return value.length > 120 ? `${value.slice(0, 117)}...` : value;
+  }
+  try {
+    const json = JSON.stringify(value);
+    return json.length > 220 ? `${json.slice(0, 217)}...` : json;
+  } catch {
+    return String(value);
+  }
+};
+
 export const normalizeToolEvent = (value: unknown, fallbackId: string): ToolEvent | null => {
   const record = asObject(value);
   if (!record) return null;
@@ -104,12 +145,18 @@ export const normalizeMessage = (value: unknown, sessionId: string, fallbackId: 
   const record = asObject(value);
   if (!record) return null;
 
+  const id = firstString(record, ['id', 'message_id', 'messageId']) ?? fallbackId;
+  const role = normalizeRole(firstString(record, ['role', 'sender', 'author']));
   const content = firstString(record, ['content', 'text', 'message']) ?? '';
+  const hasMeaningfulPayload = Boolean(role) || content.length > 0 || Array.isArray(record.toolEvents) || Array.isArray(record.tools);
+
+  if (!hasMeaningfulPayload) return null;
+
   const toolValues = asArray(record.toolEvents) ?? asArray(record.tools) ?? [];
 
   return {
-    id: firstString(record, ['id', 'message_id', 'messageId']) ?? fallbackId,
-    role: normalizeRole(firstString(record, ['role', 'sender', 'author'])),
+    id,
+    role: role ?? 'assistant',
     content,
     timestamp: firstString(record, ['timestamp', 'created_at', 'updated_at']) ?? new Date().toISOString(),
     streaming: Boolean(record.streaming ?? record.in_progress ?? record.partial),
@@ -185,36 +232,65 @@ const tryNormalizeLog = (record: Record<string, unknown>): LogEntry | null => {
   };
 };
 
-const tryNormalizeConnectionEvent = (record: Record<string, unknown>): GatewayEvent | null => {
+const tryNormalizeConnectionEvent = (record: Record<string, unknown>, context: ParseContext): GatewayEvent | null => {
   const stateCandidate = firstString(record, ['state', 'connection_state', 'connectionState', 'status']);
   if (!stateCandidate) return null;
-  const state = (['connected', 'connecting', 'disconnected', 'error'] as const).includes(stateCandidate as never)
-    ? (stateCandidate as 'connected' | 'connecting' | 'disconnected' | 'error')
+
+  const normalizedState = stateCandidate.toLowerCase();
+  const state = (['connected', 'connecting', 'disconnected', 'error'] as const).includes(normalizedState as never)
+    ? (normalizedState as 'connected' | 'connecting' | 'disconnected' | 'error')
     : undefined;
   if (!state) return null;
 
   return {
     type: 'connection',
     state,
-    lastHeartbeat: firstString(record, ['last_heartbeat', 'lastHeartbeat', 'timestamp']),
-    latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']),
+    lastHeartbeat: firstString(record, ['last_heartbeat', 'lastHeartbeat', 'timestamp']) ?? null,
+    latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']) ?? null,
     diagnostics: (asArray(record.diagnostics) ?? []).flatMap((item) => (typeof item === 'string' ? [item] : [])),
     usingMockFallback: Boolean(record.using_mock_fallback ?? record.usingMockFallback),
     lastError: firstString(record, ['error', 'last_error', 'lastError']),
+    confidence: context.confidence,
+    note: context.note,
+    raw: context.raw,
+    protocolConfidence: context.confidence,
   };
 };
+
+const createRawDiagnostic = (context: ParseContext, summary: string): GatewayEvent => ({
+  type: 'raw_event',
+  kind: 'unknown_raw_event',
+  summary,
+  source: 'gateway',
+  confidence: context.confidence,
+  note: context.note,
+  raw: context.raw,
+});
 
 export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   const record = asObject(raw);
   if (!record) {
-    return [{ type: 'error', message: 'Gateway message was not an object.', raw }];
+    return [
+      {
+        type: 'error',
+        kind: 'parse_failure',
+        message: 'Gateway message was not an object.',
+        raw,
+        confidence: 'exploratory',
+      },
+    ];
   }
 
   const eventType = String(record.type ?? record.event ?? record.kind ?? '').toLowerCase();
+  const payload = asObject(record.payload) ?? asObject(record.data) ?? record;
+  const confidence = determineConfidence(eventType, record);
+  const context: ParseContext = { confidence, raw, note: confidence === 'exploratory' ? 'Parsed through exploratory protocol heuristics.' : 'Matched a verified protocol shape.' };
 
   if (eventType === 'log') {
     const entry = tryNormalizeLog(record);
-    return entry ? [{ type: 'log', entry }] : [{ type: 'error', message: 'Unable to parse gateway log event.', raw }];
+    return entry
+      ? [{ type: 'log', entry, confidence, note: context.note, raw }]
+      : [{ type: 'error', kind: 'parse_failure', message: 'Unable to parse gateway log event.', raw, confidence }];
   }
 
   if (eventType === 'heartbeat' || eventType === 'pong') {
@@ -223,75 +299,113 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
         type: 'connection',
         state: 'connected',
         lastHeartbeat: firstString(record, ['timestamp', 'created_at']) ?? new Date().toISOString(),
-        latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']),
+        latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']) ?? null,
+        confidence: 'verified',
+        note: 'Heartbeat/pong signal received from gateway.',
+        raw,
+        protocolConfidence: 'verified',
       },
     ];
   }
 
-  const connectionEvent = tryNormalizeConnectionEvent(record);
-  if (connectionEvent && ['connection', 'status', 'gateway_status'].includes(eventType || 'status')) {
+  const connectionEvent = tryNormalizeConnectionEvent(record, context);
+  if (connectionEvent && ['connection', 'status', 'gateway_status', 'connection_state'].includes(eventType || 'status')) {
     return [connectionEvent];
   }
 
-  const payload = asObject(record.payload) ?? asObject(record.data) ?? record;
   const sessionsPayload = asArray(payload.sessions);
-  if (sessionsPayload && (eventType.includes('session') || eventType === 'snapshot' || 'sessions' in payload)) {
+  if (sessionsPayload && ['session_snapshot', 'sessions_snapshot'].includes(eventType)) {
     const sessions = sessionsPayload.map(normalizeSession).filter((session): session is Session => Boolean(session));
     if (sessions.length > 0) {
-      return [{ type: 'sessions_snapshot', sessions, source: 'gateway' }];
+      return [{ type: 'sessions_snapshot', sessions, source: 'gateway', confidence, note: context.note, raw }];
     }
+    return [{ type: 'error', kind: 'parse_failure', message: 'Session snapshot event contained no recognizable sessions.', raw, confidence }];
   }
 
-  const runCandidate = normalizeRun(payload.run ?? payload.current_run ?? payload.currentRun ?? (eventType.includes('run') ? payload : null));
-  if (runCandidate || eventType.includes('run')) {
-    return [{ type: 'run', run: runCandidate }];
+  if (eventType === 'run' || eventType === 'run_updated' || eventType === 'current_run') {
+    const runCandidate = normalizeRun(payload.run ?? payload.current_run ?? payload.currentRun ?? payload);
+    if (runCandidate || payload.run === null || payload.current_run === null || payload.currentRun === null) {
+      return [{ type: 'run', run: runCandidate, confidence, note: context.note, raw }];
+    }
+    return [{ type: 'error', kind: 'parse_failure', message: 'Run event was present but did not contain a recognizable run payload.', raw, confidence }];
   }
 
-  const sessionCandidate = normalizeSession(payload.session ?? (eventType === 'session' || eventType === 'session_updated' ? payload : null));
+  const sessionCandidate = normalizeSession(payload.session ?? (eventType === 'session_updated' ? payload : null));
   if (sessionCandidate) {
-    return [{ type: 'session', session: sessionCandidate, source: 'gateway' }];
+    return [{ type: 'session', session: sessionCandidate, source: 'gateway', confidence, note: context.note, raw }];
   }
 
   const sessionId = firstString(payload, ['session_id', 'sessionId']) ?? firstString(record, ['session_id', 'sessionId']);
   if (sessionId) {
-    const messageCandidate = normalizeMessage(payload.message ?? (eventType.includes('message') ? payload : null), sessionId, `${sessionId}-message-${Date.now()}`);
-    if (messageCandidate && !eventType.includes('delta')) {
-      return [{ type: 'message', sessionId, message: messageCandidate, mode: 'replace', source: 'gateway' }];
+    const correlationId = firstString(payload, ['client_request_id', 'clientRequestId', 'correlation_id', 'correlationId']);
+
+    if (eventType === 'message_delta' || eventType === 'session_message_delta') {
+      const delta = firstString(payload, ['delta', 'content_delta', 'contentDelta', 'chunk']);
+      if (delta) {
+        const role = normalizeRole(firstString(payload, ['role', 'sender', 'author'])) ?? 'assistant';
+        return [
+          {
+            type: 'message_delta',
+            sessionId,
+            messageId: firstString(payload, ['message_id', 'messageId', 'id']) ?? `${sessionId}-stream`,
+            delta,
+            timestamp: firstString(payload, ['timestamp', 'created_at']) ?? new Date().toISOString(),
+            role,
+            source: 'gateway',
+            correlationId,
+            confidence,
+            note: context.note,
+            raw,
+          },
+        ];
+      }
+      return [{ type: 'error', kind: 'parse_failure', message: 'Message delta event missing delta content.', raw, confidence }];
     }
 
-    const delta = firstString(payload, ['delta', 'content_delta', 'contentDelta', 'chunk']);
-    if (delta && (eventType.includes('delta') || eventType.includes('stream') || 'delta' in payload || 'chunk' in payload)) {
-      return [
-        {
-          type: 'message_delta',
-          sessionId,
-          messageId: firstString(payload, ['message_id', 'messageId', 'id']) ?? `${sessionId}-stream`,
-          delta,
-          timestamp: firstString(payload, ['timestamp', 'created_at']) ?? new Date().toISOString(),
-          role: normalizeRole(firstString(payload, ['role', 'sender', 'author'])),
-          source: 'gateway',
-        },
-      ];
+    if (eventType === 'tool_event') {
+      const toolEvent = normalizeToolEvent(payload.tool_event ?? payload.toolEvent ?? payload.tool, `${sessionId}-tool-${Date.now()}`);
+      if (toolEvent) {
+        return [
+          {
+            type: 'tool_event',
+            sessionId,
+            messageId: firstString(payload, ['message_id', 'messageId']) ?? `${sessionId}-stream`,
+            toolEvent,
+            source: 'gateway',
+            confidence,
+            note: context.note,
+            raw,
+          },
+        ];
+      }
+      return [{ type: 'error', kind: 'parse_failure', message: 'Tool event payload was incomplete.', raw, confidence }];
     }
 
-    const toolEvent = normalizeToolEvent(payload.tool_event ?? payload.toolEvent ?? payload.tool, `${sessionId}-tool-${Date.now()}`);
-    if (toolEvent) {
-      return [
-        {
-          type: 'tool_event',
-          sessionId,
-          messageId: firstString(payload, ['message_id', 'messageId']) ?? `${sessionId}-stream`,
-          toolEvent,
-          source: 'gateway',
-        },
-      ];
+    if (eventType === 'message' || eventType === 'message_created' || eventType === 'message_updated') {
+      const messageCandidate = normalizeMessage(payload.message ?? payload, sessionId, `${sessionId}-message-${Date.now()}`);
+      if (messageCandidate) {
+        return [
+          {
+            type: 'message',
+            sessionId,
+            message: messageCandidate,
+            mode: 'replace',
+            source: 'gateway',
+            correlationId,
+            confidence,
+            note: context.note,
+            raw,
+          },
+        ];
+      }
+      return [{ type: 'error', kind: 'parse_failure', message: 'Message event was present but could not be normalized safely.', raw, confidence }];
     }
   }
 
   const logEntry = tryNormalizeLog(record);
   if (logEntry) {
-    return [{ type: 'log', entry: logEntry }];
+    return [{ type: 'log', entry: logEntry, confidence, note: context.note, raw }];
   }
 
-  return [{ type: 'error', message: 'Received an unrecognized gateway event shape.', raw }];
+  return [createRawDiagnostic(context, `Unknown gateway payload preserved for diagnostics: ${summarizeRawPayload(raw)}`)];
 };

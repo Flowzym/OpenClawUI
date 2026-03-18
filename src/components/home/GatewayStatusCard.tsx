@@ -27,19 +27,22 @@ export function GatewayStatusCard() {
           <span className={`mt-2 inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusBadge(gateway.state)}`}>
             {gateway.state}
           </span>
-          {gateway.usingMockFallback ? <p className="mt-2 text-xs text-app-muted">Mock fallback active</p> : null}
+          <p className="mt-2 text-xs text-app-muted">Handshake: {gateway.handshakePhase.replace('_', ' ')}</p>
+          <p className="mt-1 text-xs text-app-muted">Protocol: {gateway.protocolConfidence}</p>
         </div>
         <div className="panel-muted p-3">
           <p className="section-title">Endpoint</p>
           <p className="mt-2 font-mono text-xs">{gateway.endpoint}</p>
+          <p className="mt-2 text-xs text-app-muted">Data mode: {gateway.dataSource}</p>
+          {gateway.usingMockFallback ? <p className="mt-1 text-xs text-app-warn">Fallback mode active</p> : null}
         </div>
         <div className="panel-muted p-3">
           <p className="section-title">Latency</p>
-          <p className="mt-2 text-lg font-semibold">{gateway.latencyMs} ms</p>
+          <p className="mt-2 text-lg font-semibold">{gateway.latencyMs === null ? 'Unknown' : `${gateway.latencyMs} ms`}</p>
         </div>
         <div className="panel-muted p-3">
           <p className="section-title">Last heartbeat</p>
-          <p className="mt-2 text-sm">{formatDateTime(gateway.lastHeartbeat)}</p>
+          <p className="mt-2 text-sm">{gateway.lastHeartbeat ? formatDateTime(gateway.lastHeartbeat) : 'No verified heartbeat yet'}</p>
         </div>
       </div>
       {gateway.lastError ? (

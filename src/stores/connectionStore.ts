@@ -1,11 +1,16 @@
 import { create } from 'zustand';
-import { mockCurrentRun, mockGatewayStatus } from '../data/mockData';
 import { gatewayClient } from '../services/gateway';
 import type { GatewayEvent } from '../services/gateway/types';
 import type { GatewayStatus, RunInfo } from '../types';
 
 interface ConnectionStore {
-  gateway: GatewayStatus & { usingMockFallback?: boolean; lastError?: string };
+  gateway: GatewayStatus & {
+    usingMockFallback?: boolean;
+    lastError?: string;
+    handshakePhase: 'idle' | 'socket_open' | 'handshake_sent' | 'ready' | 'degraded' | 'failed';
+    dataSource: 'gateway' | 'fallback' | 'none';
+    protocolConfidence: 'verified' | 'exploratory';
+  };
   currentRun: RunInfo | null;
   activeAgent: string;
   activeModel: string;
@@ -26,10 +31,13 @@ const applyGatewayEvent = (
       gateway: {
         ...state.gateway,
         state: event.state,
+        handshakePhase: event.handshakePhase ?? state.gateway.handshakePhase,
         lastHeartbeat: event.lastHeartbeat ?? state.gateway.lastHeartbeat,
         latencyMs: event.latencyMs ?? state.gateway.latencyMs,
         diagnostics: event.diagnostics ?? state.gateway.diagnostics,
         usingMockFallback: event.usingMockFallback ?? state.gateway.usingMockFallback,
+        dataSource: event.dataSource ?? state.gateway.dataSource,
+        protocolConfidence: event.protocolConfidence ?? event.confidence ?? state.gateway.protocolConfidence,
         lastError: event.lastError,
       },
     }));
@@ -46,12 +54,20 @@ const applyGatewayEvent = (
 
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   gateway: {
-    ...mockGatewayStatus,
-    usingMockFallback: true,
+    state: 'disconnected',
+    latencyMs: null,
+    endpoint: gatewayClient.getSnapshot().endpoint,
+    lastHeartbeat: null,
+    diagnostics: ['No gateway data yet.', 'Connect to begin protocol discovery.'],
+    usingMockFallback: false,
+    lastError: undefined,
+    handshakePhase: 'idle',
+    dataSource: 'none',
+    protocolConfidence: 'exploratory',
   },
-  currentRun: mockCurrentRun,
-  activeAgent: mockCurrentRun.agent,
-  activeModel: mockCurrentRun.model,
+  currentRun: null,
+  activeAgent: 'none',
+  activeModel: 'none',
   initialized: false,
   initialize(url) {
     if (!get().initialized) {
@@ -71,6 +87,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         ...state.gateway,
         endpoint,
         state: 'connecting',
+        handshakePhase: 'idle',
       },
     }));
     await gatewayClient.connect(endpoint);

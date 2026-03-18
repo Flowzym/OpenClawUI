@@ -4,9 +4,9 @@ export type LogLevel = 'info' | 'warn' | 'error';
 
 export interface GatewayStatus {
   state: ConnectionState;
-  latencyMs: number;
+  latencyMs: number | null;
   endpoint: string;
-  lastHeartbeat: string;
+  lastHeartbeat: string | null;
   diagnostics: string[];
 }
 

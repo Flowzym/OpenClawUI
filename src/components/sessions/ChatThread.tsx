@@ -3,7 +3,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { formatDateTime, statusBadge } from '../../utils/format';
 
 export function ChatThread() {
-  const { sessions, selectedSessionId, error, isUsingFallback } = useSessionStore();
+  const { sessions, selectedSessionId, error, dataSource, protocolConfidence } = useSessionStore();
   const [openTools, setOpenTools] = useState<Record<string, boolean>>({});
   const session = sessions.find((item) => item.id === selectedSessionId);
 
@@ -15,8 +15,11 @@ export function ChatThread() {
     <div className="panel flex h-full flex-col overflow-hidden">
       <div className="border-b border-app-border px-4 py-3">
         <h2 className="text-sm font-semibold">{session.title}</h2>
-        <p className="mt-1 text-xs text-app-muted">Session thread with real gateway updates where available, plus mock fallback when the protocol is incomplete.</p>
-        {isUsingFallback ? <p className="mt-2 text-xs text-app-warn">Fallback mode is active for some session data.</p> : null}
+        <p className="mt-1 text-xs text-app-muted">
+          Session thread with cautious gateway normalization. Source: {dataSource}. Protocol confidence: {protocolConfidence}.
+        </p>
+        {dataSource === 'fallback' ? <p className="mt-2 text-xs text-app-warn">Fallback mode is active for this thread.</p> : null}
+        {dataSource === 'none' ? <p className="mt-2 text-xs text-app-muted">No thread data has arrived from the gateway yet.</p> : null}
         {error ? <p className="mt-2 text-xs text-app-danger">{error}</p> : null}
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
