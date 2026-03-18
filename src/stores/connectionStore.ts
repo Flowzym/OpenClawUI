@@ -1,32 +1,82 @@
 import { create } from 'zustand';
-import { gatewayClient } from '../services/gateway';
-import type { GatewayStatus, RunInfo } from '../types';
 import { mockCurrentRun, mockGatewayStatus } from '../data/mockData';
+import { gatewayClient } from '../services/gateway';
+import type { GatewayEvent } from '../services/gateway/types';
+import type { GatewayStatus, RunInfo } from '../types';
 
 interface ConnectionStore {
-  gateway: GatewayStatus;
+  gateway: GatewayStatus & { usingMockFallback?: boolean; lastError?: string };
   currentRun: RunInfo | null;
   activeAgent: string;
   activeModel: string;
-  connect: () => Promise<void>;
+  initialized: boolean;
+  initialize: (url?: string) => () => void;
+  connect: (url?: string) => Promise<void>;
   disconnect: () => Promise<void>;
   refreshRun: () => Promise<void>;
   stopRun: () => Promise<void>;
 }
 
+const applyGatewayEvent = (
+  event: GatewayEvent,
+  set: (updater: (state: ConnectionStore) => Partial<ConnectionStore>) => void,
+) => {
+  if (event.type === 'connection') {
+    set((state) => ({
+      gateway: {
+        ...state.gateway,
+        state: event.state,
+        lastHeartbeat: event.lastHeartbeat ?? state.gateway.lastHeartbeat,
+        latencyMs: event.latencyMs ?? state.gateway.latencyMs,
+        diagnostics: event.diagnostics ?? state.gateway.diagnostics,
+        usingMockFallback: event.usingMockFallback ?? state.gateway.usingMockFallback,
+        lastError: event.lastError,
+      },
+    }));
+  }
+
+  if (event.type === 'run') {
+    set(() => ({
+      currentRun: event.run,
+      activeAgent: event.run?.agent ?? 'none',
+      activeModel: event.run?.model ?? 'none',
+    }));
+  }
+};
+
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
-  gateway: mockGatewayStatus,
+  gateway: {
+    ...mockGatewayStatus,
+    usingMockFallback: true,
+  },
   currentRun: mockCurrentRun,
   activeAgent: mockCurrentRun.agent,
   activeModel: mockCurrentRun.model,
-  async connect() {
-    set((state) => ({ gateway: { ...state.gateway, state: 'connecting' } }));
-    const state = await gatewayClient.connect(get().gateway.endpoint);
-    set((current) => ({ gateway: { ...current.gateway, state, lastHeartbeat: new Date().toISOString() } }));
+  initialized: false,
+  initialize(url) {
+    if (!get().initialized) {
+      const dispose = gatewayClient.subscribeEvents((event) => applyGatewayEvent(event, set));
+      set({ initialized: true });
+      void get().connect(url ?? get().gateway.endpoint);
+      return dispose;
+    }
+
+    void get().connect(url ?? get().gateway.endpoint);
+    return () => undefined;
+  },
+  async connect(url) {
+    const endpoint = url ?? get().gateway.endpoint;
+    set((state) => ({
+      gateway: {
+        ...state.gateway,
+        endpoint,
+        state: 'connecting',
+      },
+    }));
+    await gatewayClient.connect(endpoint);
   },
   async disconnect() {
     await gatewayClient.disconnect();
-    set((state) => ({ gateway: { ...state.gateway, state: 'disconnected' } }));
   },
   async refreshRun() {
     const run = await gatewayClient.getCurrentRun();
@@ -34,12 +84,11 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
   async stopRun() {
     const runId = get().currentRun?.id;
+    if (!runId) return;
+
     set((state) => ({
       currentRun: state.currentRun ? { ...state.currentRun, status: 'stopping' } : state.currentRun,
     }));
-    await gatewayClient.stopRun(runId);
-    set((state) => ({
-      currentRun: state.currentRun ? { ...state.currentRun, status: 'idle' } : state.currentRun,
-    }));
+    await gatewayClient.stopRun({ runId, sessionId: get().currentRun?.sessionId });
   },
 }));

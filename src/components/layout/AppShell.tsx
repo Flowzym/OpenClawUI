@@ -4,13 +4,33 @@ import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { RunToolbar } from '../shared/RunToolbar';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useConnectionStore } from '../../stores/connectionStore';
+import { useLogsStore } from '../../stores/logsStore';
+import { useSessionStore } from '../../stores/sessionStore';
 
 export function AppShell() {
   const theme = useSettingsStore((state) => state.settings.theme);
+  const gatewayUrl = useSettingsStore((state) => state.settings.gatewayUrl);
+  const initializeConnection = useConnectionStore((state) => state.initialize);
+  const initializeSessions = useSessionStore((state) => state.initialize);
+  const startLogStream = useLogsStore((state) => state.startStream);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  useEffect(() => {
+    const stopLogs = startLogStream();
+    const stopConnection = initializeConnection(gatewayUrl);
+    const stopSessions = initializeSessions();
+
+    return () => {
+      stopSessions();
+      stopConnection();
+      stopLogs();
+    };
+  }, [gatewayUrl, initializeConnection, initializeSessions, startLogStream]);
+
   return (
     <div className="flex min-h-screen bg-app-bg text-app-text">
       <Sidebar />

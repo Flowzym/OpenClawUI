@@ -6,12 +6,15 @@ import { useSessionStore } from '../stores/sessionStore';
 import { formatDateTime, statusBadge } from '../utils/format';
 
 export function SessionsPage() {
-  const { sessions, selectedSessionId, stopSessionRun } = useSessionStore();
+  const { sessions, selectedSessionId, stopSessionRun, error, isUsingFallback, isLoading } = useSessionStore();
   const session = sessions.find((item) => item.id === selectedSessionId);
 
   return (
     <div className="grid min-h-[calc(100vh-180px)] gap-4 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
       <Panel title="Sessions" subtitle="Searchable session index with virtualization-ready architecture." className="min-h-0">
+        {isLoading ? <p className="mb-3 text-xs text-app-muted">Loading sessions from gateway…</p> : null}
+        {isUsingFallback ? <p className="mb-3 text-xs text-app-warn">Using mock fallback for unavailable or unverified gateway session data.</p> : null}
+        {error ? <p className="mb-3 text-xs text-app-danger">{error}</p> : null}
         <div className="h-[calc(100vh-260px)]">
           <SessionList />
         </div>
@@ -26,7 +29,7 @@ export function SessionsPage() {
         title="Session inspector"
         subtitle="Agent, model, mode, and execution metadata."
         actions={
-          <button type="button" className="button-danger" onClick={() => session && void stopSessionRun(session.id)}>
+          <button type="button" className="button-danger" onClick={() => session && void stopSessionRun(session.id)} disabled={!session}>
             Stop session
           </button>
         }

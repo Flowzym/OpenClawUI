@@ -18,7 +18,7 @@ export function RunToolbar() {
             </p>
           </div>
         </div>
-        <button type="button" className="button-danger shrink-0" onClick={() => void stopRun()}>
+        <button type="button" className="button-danger shrink-0 disabled:cursor-not-allowed disabled:opacity-60" disabled={!currentRun} onClick={() => void stopRun()}>
           Abort / Stop
         </button>
       </div>
