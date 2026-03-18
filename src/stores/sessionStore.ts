@@ -11,6 +11,8 @@ interface PendingMessageCorrelation {
   gatewayMessageId?: string;
   content: string;
   createdAt: string;
+  userResolved: boolean;
+  assistantResolved: boolean;
 }
 
 interface SessionStore {
@@ -40,23 +42,6 @@ const mergeSession = (sessions: Session[], next: Session) => {
   return sessions.map((session) => (session.id === next.id ? next : session));
 };
 
-const removePending = (
-  pending: Record<string, PendingMessageCorrelation[]>,
-  sessionId: string,
-  clientRequestId?: string,
-  assistantPlaceholderId?: string,
-  userMessageId?: string,
-) => {
-  const queue = pending[sessionId] ?? [];
-  const nextQueue = queue.filter(
-    (item) =>
-      item.clientRequestId !== clientRequestId &&
-      item.assistantPlaceholderId !== assistantPlaceholderId &&
-      item.userMessageId !== userMessageId,
-  );
-  return { ...pending, [sessionId]: nextQueue };
-};
-
 const updatePending = (
   pending: Record<string, PendingMessageCorrelation[]>,
   sessionId: string,
@@ -64,11 +49,28 @@ const updatePending = (
   updater: (item: PendingMessageCorrelation) => PendingMessageCorrelation,
 ) => {
   const queue = pending[sessionId] ?? [];
+  const nextQueue = queue
+    .map((item) => (predicate(item) ? updater(item) : item))
+    .filter((item) => !(item.userResolved && item.assistantResolved));
+
   return {
     ...pending,
-    [sessionId]: queue.map((item) => (predicate(item) ? updater(item) : item)),
+    [sessionId]: nextQueue,
   };
 };
+
+const resolvePending = (
+  pending: Record<string, PendingMessageCorrelation[]>,
+  sessionId: string,
+  correlation: PendingMessageCorrelation,
+  resolution: Partial<Pick<PendingMessageCorrelation, 'userResolved' | 'assistantResolved' | 'gatewayMessageId'>>,
+) =>
+  updatePending(
+    pending,
+    sessionId,
+    (item) => item.clientRequestId === correlation.clientRequestId,
+    (item) => ({ ...item, ...resolution }),
+  );
 
 interface PendingLookup {
   correlationId?: string;
@@ -139,14 +141,20 @@ const reconcileIncomingMessage = (
 const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater: (state: SessionStore) => Partial<SessionStore>) => void) => {
   switch (event.type) {
     case 'sessions_snapshot':
-      set((state) => ({
-        sessions: event.sessions,
-        selectedSessionId: state.selectedSessionId || event.sessions[0]?.id || '',
-        isLoading: false,
-        dataSource: event.source,
-        protocolConfidence: event.confidence ?? state.protocolConfidence,
-        error: undefined,
-      }));
+      set((state) => {
+        const selectedSessionId =
+          event.sessions.find((session) => session.id === state.selectedSessionId)?.id ?? event.sessions[0]?.id ?? '';
+
+        return {
+          sessions: event.sessions,
+          selectedSessionId,
+          isLoading: false,
+          dataSource: event.source,
+          protocolConfidence: event.confidence ?? state.protocolConfidence,
+          error: undefined,
+          pendingCorrelations: event.source === 'none' ? {} : state.pendingCorrelations,
+        };
+      });
       break;
     case 'session':
       set((state) => ({
@@ -182,21 +190,12 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
           };
         });
 
-        const nextPending = resolvedUser || resolvedAssistant
-          ? removePending(
-              state.pendingCorrelations,
-              event.sessionId,
-              pending?.clientRequestId,
-              resolvedAssistant ? pending?.assistantPlaceholderId : undefined,
-              resolvedUser ? pending?.userMessageId : undefined,
-            )
-          : pending && event.message.role === 'assistant'
-            ? updatePending(
-                state.pendingCorrelations,
-                event.sessionId,
-                (item) => item.clientRequestId === pending.clientRequestId,
-                (item) => ({ ...item, gatewayMessageId: event.message.id }),
-              )
+        const nextPending = pending
+          ? resolvePending(state.pendingCorrelations, event.sessionId, pending, {
+              userResolved: pending.userResolved || resolvedUser,
+              assistantResolved: pending.assistantResolved || resolvedAssistant,
+              gatewayMessageId: event.message.role === 'assistant' ? event.message.id : pending.gatewayMessageId,
+            })
           : state.pendingCorrelations;
 
         return {
@@ -261,15 +260,11 @@ const applyEvent = (event: GatewayEvent, get: () => SessionStore, set: (updater:
 
         return {
           sessions,
-          pendingCorrelations: didResolvePlaceholder
-            ? removePending(state.pendingCorrelations, event.sessionId, pending?.clientRequestId, pending?.assistantPlaceholderId)
-            : pending
-              ? updatePending(
-                  state.pendingCorrelations,
-                  event.sessionId,
-                  (item) => item.clientRequestId === pending.clientRequestId,
-                  (item) => ({ ...item, gatewayMessageId: event.messageId }),
-                )
+          pendingCorrelations: pending
+            ? resolvePending(state.pendingCorrelations, event.sessionId, pending, {
+                assistantResolved: pending.assistantResolved || didResolvePlaceholder,
+                gatewayMessageId: event.messageId,
+              })
             : state.pendingCorrelations,
           dataSource: event.source,
           protocolConfidence: event.confidence ?? state.protocolConfidence,
@@ -405,7 +400,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ...state.pendingCorrelations,
         [sessionId]: [
           ...(state.pendingCorrelations[sessionId] ?? []),
-          { clientRequestId, clientMessageId, userMessageId, assistantPlaceholderId, content: trimmed, createdAt: timestamp },
+          {
+            clientRequestId,
+            clientMessageId,
+            userMessageId,
+            assistantPlaceholderId,
+            content: trimmed,
+            createdAt: timestamp,
+            userResolved: false,
+            assistantResolved: false,
+          },
         ],
       },
       sessions: state.sessions.map((session) =>
@@ -447,7 +451,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } catch (error) {
       set((state) => ({
         error: error instanceof Error ? error.message : 'Failed to send message to the gateway.',
-        pendingCorrelations: removePending(state.pendingCorrelations, sessionId, clientRequestId, assistantPlaceholderId, userMessageId),
+        pendingCorrelations: updatePending(
+          state.pendingCorrelations,
+          sessionId,
+          (item) => item.clientRequestId === clientRequestId,
+          (item) => ({ ...item, userResolved: true, assistantResolved: true }),
+        ),
         sessions: state.sessions.map((session) =>
           session.id === sessionId
             ? {

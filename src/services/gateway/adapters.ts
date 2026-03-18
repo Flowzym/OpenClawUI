@@ -40,13 +40,6 @@ const firstNumber = (record: Record<string, unknown>, keys: string[]): number | 
 };
 
 const determineVerification = (eventType: string, record: Record<string, unknown>) => {
-  if (eventType === 'heartbeat' || eventType === 'pong') {
-    return {
-      confidence: 'verified' as const,
-      verificationSignal: 'heartbeat' as const,
-    };
-  }
-
   if (record.protocol_verified === true || record.verified === true) {
     return {
       confidence: 'verified' as const,
@@ -317,10 +310,10 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
         state: 'connected',
         lastHeartbeat: firstString(record, ['timestamp', 'created_at']) ?? new Date().toISOString(),
         latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']) ?? null,
-        confidence: 'verified',
-        note: 'Heartbeat/pong signal received from gateway.',
+        confidence: 'exploratory',
+        note: 'Heartbeat/pong observed from gateway transport; handshake remains unverified without an explicit acknowledgement.',
         raw,
-        protocolConfidence: 'verified',
+        protocolConfidence: 'exploratory',
         verificationSignal: 'heartbeat',
       },
     ];
