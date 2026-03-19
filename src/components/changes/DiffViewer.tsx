@@ -2,14 +2,14 @@ import type { ChangeItem } from '../../types';
 
 export function DiffViewer({ change }: { change?: ChangeItem }) {
   if (!change) {
-    return <div className="panel flex h-full items-center justify-center text-app-muted">Select a change to view diff chunks.</div>;
+    return <div className="panel flex h-full items-center justify-center text-app-muted">Select a dirty file to review the local before/after diff.</div>;
   }
 
   return (
     <div className="panel flex h-full flex-col overflow-hidden">
       <div className="border-b border-app-border px-4 py-3">
         <h2 className="text-sm font-semibold">{change.filePath}</h2>
-        <p className="mt-1 text-xs text-app-muted">Mock patch workflow with review-ready diff chunks.</p>
+        <p className="mt-1 text-xs text-app-muted">{change.rootPath ?? 'Configured root'} • derived from saved text versus current editor state.</p>
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4 font-mono text-xs">
         {change.chunks.map((chunk) => (
