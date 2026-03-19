@@ -112,7 +112,7 @@ Verified inbound signals today:
 
 Still exploratory outbound commands:
 
-- Handshake/init guesses: preferred `gateway.connect`, small retained fallback `connect`.
+- Handshake/init guesses: preferred `gateway.connect`, with a delayed `connect` fallback retained only when the preferred handshake attempt stays unverified and no inbound signal correlates with it yet.
 - Subscription/session/run guesses: preferred `subscribe`, `sessions.list`, `run.current`, `run.stop`.
 - Message send guesses: preferred `session.message`, with the `send_message` fallback only staged when the socket is still exploratory and no correlated inbound response is observed after the primary attempt.
 - Transport liveness guess: application-level `ping`.
@@ -121,14 +121,17 @@ Outbound command consolidation is now in progress:
 
 - `sendMessage` uses an explicit preferred-vs-fallback strategy instead of unconditionally sending both guessed variants.
 - `sessions.list` and `run.stop` now remain single-variant exploratory commands with trace metadata that explains why no extra guessed fallback is being sent yet.
-- Protocol trace rows now surface the outbound command strategy (`primary`, `fallback`, etc.), why that strategy was used, and when a fallback attempt was linked to an earlier primary attempt.
+- Handshake/bootstrap now follows a narrower sequence: send preferred `gateway.connect`, stage the `connect` fallback only if the first attempt still has no correlated inbound activity, then issue bootstrap requests without promoting readiness unless a verified handshake acknowledgement arrives.
+- `subscribe` is now treated as a bounded bootstrap stream request. Trace/log output makes it explicit whether it ran during post-handshake bootstrap or degraded exploratory bootstrap, and no alternate subscribe shape is guessed yet.
+- `run.current` remains a single exploratory request, but current-run diagnostics now distinguish between state populated by an explicit `run.current` request and state inferred from later inbound run events.
+- Protocol trace rows now surface the outbound command group, primary/fallback role, why a command was attempted at that moment, and when a fallback attempt was linked to an earlier primary attempt.
 
 How to test locally:
 
 1. Run `npm run dev`.
 2. Point Settings → gateway URL at a local OpenClaw gateway such as `ws://127.0.0.1:18789`.
 3. Open **Logs** and watch the protocol trace for outbound command notes, inbound payload summaries, parse category (`verified_parse`, `exploratory_parse`, `unknown_raw`, `parse_failure`), confidence, and handshake phase.
-4. Treat any successful session/message flow without an explicit handshake acknowledgement as exploratory, not verified.
+4. Treat any successful session/message/run flow without an explicit handshake acknowledgement as exploratory, not verified.
 
 ## Replacing mocks with real integrations
 

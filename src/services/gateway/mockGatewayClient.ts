@@ -66,6 +66,7 @@ export const mockGatewayClient: GatewayClient = {
       connectionState: 'connected',
       handshakePhase: 'ready',
       currentRun: mockCurrentRun,
+      currentRunSource: 'explicit_request',
       sessions: mockSessions,
       dataSource: 'fallback',
       usingMockFallback: true,

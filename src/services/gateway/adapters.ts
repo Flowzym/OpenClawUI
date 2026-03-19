@@ -333,7 +333,17 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   if (sessionsPayload && ['session_snapshot', 'sessions_snapshot'].includes(eventType)) {
     const sessions = sessionsPayload.map(normalizeSession).filter((session): session is Session => Boolean(session));
     if (sessions.length > 0) {
-      return [{ type: 'sessions_snapshot', sessions, source: 'gateway', confidence, parseCategory: context.parseCategory, note: context.note, raw }];
+      return [
+        {
+          type: 'sessions_snapshot',
+          sessions,
+          source: 'gateway',
+          confidence,
+          parseCategory: context.parseCategory,
+          note: `${context.note ?? 'Parsed through exploratory protocol heuristics.'} Inbound session snapshot payload observed.`,
+          raw,
+        },
+      ];
     }
     return [{ type: 'error', kind: 'parse_failure', message: 'Session snapshot event contained no recognizable sessions.', raw, confidence, parseCategory: 'parse_failure' }];
   }
@@ -341,7 +351,20 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   if (eventType === 'run' || eventType === 'run_updated' || eventType === 'current_run') {
     const runCandidate = normalizeRun(payload.run ?? payload.current_run ?? payload.currentRun ?? payload);
     if (runCandidate || payload.run === null || payload.current_run === null || payload.currentRun === null) {
-      return [{ type: 'run', run: runCandidate, confidence, parseCategory: context.parseCategory, note: context.note, raw }];
+      const runNote =
+        eventType === 'current_run'
+          ? 'Inbound current_run payload observed; compare trace correlation to tell whether this answered an explicit run.current request.'
+          : 'Inbound run event observed; this may update current-run state even without an explicit run.current request.';
+      return [
+        {
+          type: 'run',
+          run: runCandidate,
+          confidence,
+          parseCategory: context.parseCategory,
+          note: `${context.note ?? 'Parsed through exploratory protocol heuristics.'} ${runNote}`,
+          raw,
+        },
+      ];
     }
     return [{ type: 'error', kind: 'parse_failure', message: 'Run event was present but did not contain a recognizable run payload.', raw, confidence, parseCategory: 'parse_failure' }];
   }
