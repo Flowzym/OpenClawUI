@@ -7,6 +7,7 @@ import type { ChangeItem, Project, ProjectFile } from '../types';
 
 interface OpenProjectFile {
   projectId: string;
+  projectName: string;
   rootPath: string;
   filePath: string;
   content: string;
@@ -41,9 +42,10 @@ interface ProjectsStore {
   loadProjectTree: (projectId: string) => Promise<void>;
   updateActiveFileContent: (content: string) => void;
   saveSelectedFile: () => Promise<void>;
-  saveFile: (filePath: string) => Promise<void>;
-  resetFile: (filePath: string) => void;
+  saveFile: (filePath: string, projectId?: string) => Promise<void>;
+  resetFile: (filePath: string, projectId?: string) => void;
   saveDirtyFiles: () => Promise<void>;
+  resetDirtyFiles: () => void;
   sendFileToSession: (filePath: string, sessionId: string) => Promise<void>;
   getOpenFile: (projectId: string, filePath: string) => OpenProjectFile | undefined;
 }
@@ -74,10 +76,31 @@ const syncChanges = (openFiles: Record<string, OpenProjectFile>): ChangeItem[] =
       ...change,
       id: `${file.projectId}:${file.filePath}`,
       projectId: file.projectId,
+      projectName: file.projectName,
       rootPath: file.rootPath,
+      dirty: file.dirty,
     });
     return changes;
   }, []);
+
+const findOpenFileTarget = (
+  state: Pick<ProjectsStore, 'openFiles' | 'selectedProjectId'>,
+  filePath: string,
+  projectId?: string,
+) => {
+  const resolvedProjectId = projectId ?? state.selectedProjectId;
+  if (!resolvedProjectId) return undefined;
+
+  const fileKey = getOpenFileKey(resolvedProjectId, filePath);
+  const file = state.openFiles[fileKey];
+  if (!file) return undefined;
+
+  return {
+    fileKey,
+    file,
+    projectId: resolvedProjectId,
+  };
+};
 
 const ensureTab = (project: Project, filePath: string) => {
   const existing = project.openTabs.find((tab) => tab.path === filePath);
@@ -153,6 +176,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
         ...state.openFiles,
         [fileKey]: {
           projectId: project.id,
+          projectName: project.name,
           rootPath: project.rootPath,
           filePath,
           content: '',
@@ -173,6 +197,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
           ...state.openFiles,
           [fileKey]: {
             projectId: project.id,
+            projectName: project.name,
             rootPath: project.rootPath,
             filePath,
             content: file.content,
@@ -340,13 +365,14 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     if (!filePath) return;
     await get().saveFile(filePath);
   },
-  async saveFile(filePath) {
-    const project = get().projects.find((item) => item.id === get().selectedProjectId);
+  async saveFile(filePath, projectId) {
+    const target = findOpenFileTarget(get(), filePath, projectId);
+    if (!target) return;
+
+    const project = get().projects.find((item) => item.id === target.projectId);
     if (!project) return;
 
-    const fileKey = getOpenFileKey(project.id, filePath);
-    const current = get().openFiles[fileKey];
-    if (!current) return;
+    const { fileKey, file: current } = target;
 
     set((state) => ({
       openFiles: {
@@ -402,13 +428,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       }));
     }
   },
-  resetFile(filePath) {
-    const projectId = get().selectedProjectId;
-    if (!projectId) return;
+  resetFile(filePath, projectId) {
+    const target = findOpenFileTarget(get(), filePath, projectId);
+    if (!target) return;
 
-    const fileKey = getOpenFileKey(projectId, filePath);
-    const current = get().openFiles[fileKey];
-    if (!current) return;
+    const { fileKey, file: current } = target;
 
     set((state) => {
       const nextOpenFiles = {
@@ -430,10 +454,13 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   async saveDirtyFiles() {
     const dirtyFiles = Object.values(get().openFiles).filter((file) => file.dirty);
     for (const file of dirtyFiles) {
-      if (get().selectedProjectId !== file.projectId) {
-        await get().selectProject(file.projectId);
-      }
-      await get().saveFile(file.filePath);
+      await get().saveFile(file.filePath, file.projectId);
+    }
+  },
+  resetDirtyFiles() {
+    const dirtyFiles = Object.values(get().openFiles).filter((file) => file.dirty);
+    for (const file of dirtyFiles) {
+      get().resetFile(file.filePath, file.projectId);
     }
   },
   async sendFileToSession(filePath, sessionId) {

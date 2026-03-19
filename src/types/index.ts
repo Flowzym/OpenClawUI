@@ -89,15 +89,28 @@ export interface DiffChunk {
   id: string;
   header: string;
   lines: string[];
+  lineCount: number;
+  addedLines: number;
+  removedLines: number;
+}
+
+export interface ChangeStats {
+  chunkCount: number;
+  lineCount: number;
+  addedLines: number;
+  removedLines: number;
 }
 
 export interface ChangeItem {
   id: string;
   projectId?: string;
+  projectName?: string;
   rootPath?: string;
   filePath: string;
   status: 'modified' | 'added' | 'deleted';
+  dirty: boolean;
   summary: string;
+  stats: ChangeStats;
   chunks: DiffChunk[];
 }
 
