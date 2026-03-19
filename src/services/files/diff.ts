@@ -59,14 +59,13 @@ const buildOps = (before: string[], after: string[]) => {
   return ops;
 };
 
-const summarizeChange = (status: ChangeItem['status'], beforeLines: string[], afterLines: string[]) => {
-  if (status === 'added') return `New local file with ${afterLines.length} line${afterLines.length === 1 ? '' : 's'}.`;
-  if (status === 'deleted') return `Local deletion of ${beforeLines.length} line${beforeLines.length === 1 ? '' : 's'}.`;
+const summarizeChange = (status: ChangeItem['status'], addedLines: number, removedLines: number, chunkCount: number) => {
+  const sectionLabel = `${chunkCount} section${chunkCount === 1 ? '' : 's'}`;
 
-  const delta = afterLines.length - beforeLines.length;
-  if (delta === 0) return `Edited ${afterLines.length} line${afterLines.length === 1 ? '' : 's'} locally.`;
-  if (delta > 0) return `Added ${delta} line${delta === 1 ? '' : 's'} locally.`;
-  return `Removed ${Math.abs(delta)} line${delta === -1 ? '' : 's'} locally.`;
+  if (status === 'added') return `New local file: +${addedLines} line${addedLines === 1 ? '' : 's'} across ${sectionLabel}.`;
+  if (status === 'deleted') return `Local reset target: -${removedLines} line${removedLines === 1 ? '' : 's'} across ${sectionLabel}.`;
+  if (addedLines === 0 && removedLines === 0) return `Edited locally across ${sectionLabel}.`;
+  return `Local edit: +${addedLines} / -${removedLines} across ${sectionLabel}.`;
 };
 
 const buildChunk = (filePath: string, beforeLines: string[], afterLines: string[]): DiffChunk => {
@@ -77,11 +76,16 @@ const buildChunk = (filePath: string, beforeLines: string[], afterLines: string[
     if (op.type === 'remove') return `- ${op.line}`;
     return `  ${op.line}`;
   });
+  const addedLines = ops.filter((op) => op.type === 'add').length;
+  const removedLines = ops.filter((op) => op.type === 'remove').length;
 
   return {
     id: `${filePath}-chunk-1`,
     header,
     lines,
+    lineCount: lines.length,
+    addedLines,
+    removedLines,
   };
 };
 
@@ -91,12 +95,24 @@ export const buildChangeItem = ({ filePath, before, after }: BuildDiffRequest): 
   const beforeLines = toLines(before);
   const afterLines = toLines(after);
   const status: ChangeItem['status'] = before.length === 0 ? 'added' : after.length === 0 ? 'deleted' : 'modified';
+  const chunks = [buildChunk(filePath, beforeLines, afterLines)];
+  const stats = chunks.reduce(
+    (accumulator, chunk) => ({
+      chunkCount: accumulator.chunkCount + 1,
+      lineCount: accumulator.lineCount + chunk.lineCount,
+      addedLines: accumulator.addedLines + chunk.addedLines,
+      removedLines: accumulator.removedLines + chunk.removedLines,
+    }),
+    { chunkCount: 0, lineCount: 0, addedLines: 0, removedLines: 0 },
+  );
 
   return {
     id: `change-${filePath}`,
     filePath,
     status,
-    summary: summarizeChange(status, beforeLines, afterLines),
-    chunks: [buildChunk(filePath, beforeLines, afterLines)],
+    dirty: true,
+    summary: summarizeChange(status, stats.addedLines, stats.removedLines, stats.chunkCount),
+    stats,
+    chunks,
   };
 };

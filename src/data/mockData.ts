@@ -235,7 +235,14 @@ export const mockChanges: ChangeItem[] = [
     id: 'chg-1',
     filePath: 'src/pages/SessionsPage.tsx',
     status: 'modified',
+    dirty: true,
     summary: 'Adds 3-column operator layout with session inspector and run toolbar.',
+    stats: {
+      chunkCount: 1,
+      lineCount: 6,
+      addedLines: 5,
+      removedLines: 1,
+    },
     chunks: [
       {
         id: 'chunk-1',
@@ -248,6 +255,9 @@ export const mockChanges: ChangeItem[] = [
           '+   </div>',
           '+ );',
         ],
+        lineCount: 6,
+        addedLines: 5,
+        removedLines: 1,
       },
     ],
   },
@@ -255,12 +265,22 @@ export const mockChanges: ChangeItem[] = [
     id: 'chg-2',
     filePath: 'src/stores/sessionStore.ts',
     status: 'added',
+    dirty: true,
     summary: 'Introduces mock streaming controls and session selection state.',
+    stats: {
+      chunkCount: 1,
+      lineCount: 1,
+      addedLines: 1,
+      removedLines: 0,
+    },
     chunks: [
       {
         id: 'chunk-2',
         header: '@@ +1,18 @@',
         lines: ['+ export const useSessionStore = create(...)'],
+        lineCount: 1,
+        addedLines: 1,
+        removedLines: 0,
       },
     ],
   },
