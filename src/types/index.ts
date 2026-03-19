@@ -129,5 +129,6 @@ export interface AppSettings {
   advanced: {
     reconnect: boolean;
     telemetry: boolean;
+    protocolVerification: boolean;
   };
 }

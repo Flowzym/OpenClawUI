@@ -43,6 +43,10 @@ const sanitizeSettings = (input: unknown): AppSettings => {
     advanced: {
       reconnect: typeof advancedInput.reconnect === 'boolean' ? advancedInput.reconnect : defaultSettings.advanced.reconnect,
       telemetry: typeof advancedInput.telemetry === 'boolean' ? advancedInput.telemetry : defaultSettings.advanced.telemetry,
+      protocolVerification:
+        typeof advancedInput.protocolVerification === 'boolean'
+          ? advancedInput.protocolVerification
+          : defaultSettings.advanced.protocolVerification,
     },
   };
 };
