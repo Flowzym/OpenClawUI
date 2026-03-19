@@ -1,6 +1,6 @@
 # OpenClaw Operator UI
 
-A Windows-first React + TypeScript + Vite operator console for OpenClaw. The UI now includes an exploratory real gateway client for the current WebSocket lifecycle, reconnect, and session/message event flow, while keeping the file-service layer mock-backed until the file bridge is implemented.
+A Windows-first React + TypeScript + Vite operator console for OpenClaw. The UI now includes an exploratory real gateway client for the current WebSocket lifecycle, reconnect, and session/message event flow, and now adds a first real local file bridge for configured project roots while keeping an explicit mock fallback when the bridge is unavailable.
 
 ## Setup
 
@@ -52,7 +52,7 @@ The app uses separate Zustand stores to keep operator concerns isolated and easy
 
 - Gateway integration: exploratory-real. `src/services/gateway/realGatewayClient.ts` is the active client and keeps explicit handshake phases, protocol confidence, reconnect handling, and raw payload diagnostics while protocol details are still being confirmed.
 - Protocol confidence: partial. The UI distinguishes `verified` signals from exploratory heuristics instead of assuming readiness from any recognized event name.
-- File service: still mock. `src/services/files/` remains a placeholder abstraction backed by `mockFileService.ts`.
+- File service: real local bridge first. `src/services/files/` now prefers an HTTP-backed local bridge served by the Vite dev server for configured roots, with an explicit mock fallback if that bridge is unavailable.
 
 ## Replacing mocks with real integrations
 
@@ -66,9 +66,9 @@ Recommended path to continue hardening integrations:
 
 1. Confirm the exact OpenClaw gateway handshake, subscription, session-list, send-message, current-run, and stop-run payloads called out by `TODO(openclaw-protocol)` markers.
 2. Keep refining session/message reconciliation as more real gateway correlation fields are confirmed.
-3. Replace file tree and read operations in `src/services/files/mockFileService.ts` with a real file bridge.
-4. Persist settings and project roots locally.
-5. Add editor save, diff apply, and session attachment actions via the real backend.
+3. Persist settings and project roots locally.
+4. Expand file bridge coverage beyond text-first tree/read/write operations.
+5. Add git-aware patch apply/review flows once the local edited-file workflow is stable.
 
 ## MVP pages
 

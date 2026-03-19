@@ -12,7 +12,11 @@ function TreeNode({ node, depth = 0 }: { node: ProjectFile; depth?: number }) {
           selectedFilePath === node.path ? 'bg-app-accent/10 text-app-text' : 'text-app-muted hover:bg-app-panelAlt'
         }`}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        onClick={() => node.type === 'file' && selectFile(node.path)}
+        onClick={() => {
+          if (node.type === 'file') {
+            void selectFile(node.path);
+          }
+        }}
       >
         <span className="mr-2 text-xs">{node.type === 'folder' ? '▸' : '•'}</span>
         {node.name}
@@ -25,6 +29,10 @@ function TreeNode({ node, depth = 0 }: { node: ProjectFile; depth?: number }) {
 }
 
 export function ProjectTree({ files }: { files: ProjectFile[] }) {
+  if (files.length === 0) {
+    return <div className="rounded-md border border-app-border bg-app-panelAlt px-3 py-3 text-sm text-app-muted">No readable files were returned for this root yet.</div>;
+  }
+
   return (
     <div className="space-y-1">
       {files.map((file) => (
