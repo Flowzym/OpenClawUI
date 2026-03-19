@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { fileService } from '../services/files';
 import type { FileServiceBridgeStatus } from '../services/files/types';
 import { useSessionStore } from './sessionStore';
-import { useSettingsStore } from './settingsStore';
+import { normalizeProjectRoots, useSettingsStore } from './settingsStore';
 import type { ChangeItem, Project, ProjectFile } from '../types';
 
 interface OpenProjectFile {
@@ -49,8 +49,7 @@ interface ProjectsStore {
 }
 
 const getOpenFileKey = (projectId: string, filePath: string) => `${projectId}:${filePath}`;
-const normalizeRoots = (roots: string[]) => roots.map((root) => root.trim()).filter(Boolean);
-const rootsKeyFor = (roots: string[]) => normalizeRoots(roots).join('||');
+const rootsKeyFor = (roots: string[]) => normalizeProjectRoots(roots).join('||');
 
 const updateProject = (projects: Project[], projectId: string, updater: (project: Project) => Project) =>
   projects.map((project) => (project.id === projectId ? updater(project) : project));
@@ -214,9 +213,20 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     set((state) => ({ fileInspectorOpen: !state.fileInspectorOpen }));
   },
   async loadProjects() {
-    const roots = normalizeRoots(useSettingsStore.getState().settings.projectRoots);
+    const roots = normalizeProjectRoots(useSettingsStore.getState().settings.projectRoots);
     const initializedRootsKey = rootsKeyFor(roots);
-    set({ loadingProjects: true, projectError: undefined });
+    const previousSelectedProjectId = get().selectedProjectId;
+    set({
+      loadingProjects: true,
+      loadingTree: false,
+      projectError: undefined,
+      projects: [],
+      selectedProjectId: '',
+      selectedFilePath: '',
+      projectTrees: {},
+      openFiles: {},
+      changes: [],
+    });
 
     const runtimeStatus = await fileService.initializeRuntime();
     set({ bridgeStatus: runtimeStatus });
@@ -239,7 +249,6 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
 
     try {
       const projects = await fileService.listProjects({ roots });
-      const previousSelectedProjectId = get().selectedProjectId;
       const selectedProjectId = projects.some((project) => project.id === previousSelectedProjectId)
         ? previousSelectedProjectId
         : projects.find((project) => project.status === 'ready')?.id ?? projects[0]?.id ?? '';
