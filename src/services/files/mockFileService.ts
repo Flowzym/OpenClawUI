@@ -1,41 +1,66 @@
-import { mockChanges, mockProjects } from '../../data/mockData';
-import type { FileService } from './types';
+import { mockProjects } from '../../data/mockData';
+import type { Project, ProjectFile } from '../../types';
+import { buildChangeItem } from './diff';
+import type { FileDocument, FileService } from './types';
 
-const flattenFiles = (items: typeof mockProjects[number]['files']): Record<string, string> => {
-  return items.reduce<Record<string, string>>((acc, item) => {
-    if (item.type === 'file' && item.content) {
-      acc[item.path] = item.content;
+const flattenFiles = (items: ProjectFile[], acc: Record<string, string> = {}) => {
+  items.forEach((item) => {
+    if (item.type === 'file') {
+      acc[item.path] = item.content ?? '';
     }
     if (item.children) {
-      Object.assign(acc, flattenFiles(item.children));
+      flattenFiles(item.children, acc);
     }
-    return acc;
-  }, {});
+  });
+
+  return acc;
 };
 
-const fileMap = mockProjects.reduce<Record<string, string>>((acc, project) => {
+const cloneProjects = (): Project[] => mockProjects.map((project) => ({
+  ...project,
+  files: structuredClone(project.files),
+  openTabs: [...project.openTabs],
+}));
+
+const mockProjectMap = cloneProjects();
+const fileMap = mockProjectMap.reduce<Record<string, string>>((acc, project) => {
   Object.assign(acc, flattenFiles(project.files));
   return acc;
 }, {});
 
+const resolveMockDocument = (filePath: string): FileDocument => ({
+  path: filePath,
+  content: fileMap[filePath] ?? '// File content unavailable in mock fallback service',
+  encoding: 'utf-8',
+  language: filePath.split('.').pop() ?? 'text',
+  updatedAt: new Date().toISOString(),
+  size: (fileMap[filePath] ?? '').length,
+});
+
 export const mockFileService: FileService = {
-  async listProjects() {
-    // TODO: Replace mock project discovery with Windows/WSL-aware workspace enumeration.
-    return mockProjects;
+  getStatus() {
+    return {
+      kind: 'mock-fallback',
+      reason: 'Local file bridge unavailable; using in-memory mock data.',
+    };
   },
-  async readFile(path) {
-    // TODO: Replace mock file reads with a real bridge to the OpenClaw file service.
-    return fileMap[path] ?? '// File content unavailable in mock service';
+  async listProjects() {
+    return cloneProjects();
+  },
+  async listProjectTree({ projectId }) {
+    return cloneProjects().find((project) => project.id === projectId)?.files ?? [];
+  },
+  async openFile({ filePath }) {
+    return resolveMockDocument(filePath);
+  },
+  async saveFile({ filePath, content }) {
+    fileMap[filePath] = content;
+    return resolveMockDocument(filePath);
+  },
+  buildDiff(request) {
+    return buildChangeItem(request);
   },
   async sendFileToSession() {
-    // TODO: Replace mock send action with gateway/file-service integration.
-  },
-  async openDiff(filePath) {
-    // TODO: Replace mock diff lookup with real patch/diff generation.
-    return mockChanges.find((change) => change.filePath === filePath) ?? null;
-  },
-  async listProjectTree(projectId) {
-    // TODO: Replace mock tree listing with real project file indexing.
-    return mockProjects.find((project) => project.id === projectId)?.files ?? [];
+    // Intentionally no-op in explicit mock fallback mode.
   },
 };
