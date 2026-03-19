@@ -61,6 +61,7 @@ export const mockGatewayClient: GatewayClient = {
       assistantPlaceholderId: input.assistantPlaceholderId,
     };
   },
+  async runVerificationScenario() {},
   getSnapshot() {
     return {
       connectionState: 'connected',

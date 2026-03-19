@@ -133,6 +133,20 @@ How to test locally:
 3. Open **Logs** and watch the protocol trace for outbound command notes, inbound payload summaries, parse category (`verified_parse`, `exploratory_parse`, `unknown_raw`, `parse_failure`), confidence, and handshake phase.
 4. Treat any successful session/message/run flow without an explicit handshake acknowledgement as exploratory, not verified.
 
+### Protocol verification mode
+
+A compact **Protocol verification** panel now lives in **Logs**, with a matching toggle in **Settings → Advanced settings**.
+
+Use it only for testing against a real local OpenClaw gateway:
+
+1. Enable **Protocol verification mode**.
+2. Connect the UI to the target local gateway.
+3. Trigger one-click manual probes for `handshake/connect`, `sessions.list`, `sendMessage`, `run.current`, `run.stop`, and `subscribe`.
+4. Read the **Protocol trace** as the source of truth; each manual action is annotated so it stays distinct from the app's normal exploratory traffic.
+5. Use the **Evidence summary** to narrow which exploratory commands have actual supporting evidence and which still need confirmation.
+
+The summary is intentionally heuristic. It can report states such as `not tested`, `observed`, `likely working`, `still exploratory`, or `no evidence`, and it does **not** claim protocol certainty unless the trace shows explicit evidence.
+
 ## Replacing mocks with real integrations
 
 All integration boundaries are isolated behind service modules:

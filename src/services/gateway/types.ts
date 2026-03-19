@@ -12,6 +12,16 @@ export type DiagnosticEventKind =
   | 'handshake_notice'
   | 'fallback_activated';
 
+export type VerificationScenarioId =
+  | 'handshake_probe'
+  | 'session_snapshot'
+  | 'send_test_message'
+  | 'run_current'
+  | 'run_stop'
+  | 'subscribe_bootstrap';
+
+export type VerificationStatus = 'not tested' | 'observed' | 'likely working' | 'still exploratory' | 'no evidence';
+
 export interface ProtocolTraceEntry {
   id: string;
   direction: 'outbound' | 'inbound';
@@ -20,6 +30,7 @@ export interface ProtocolTraceEntry {
   handshakePhase: HandshakePhase;
   confidence: ProtocolConfidence;
   parseCategory?: ProtocolParseCategory;
+  eventType?: GatewayEvent['type'];
   commandKind?: string;
   purpose?: string;
   variant?: string;
@@ -31,6 +42,12 @@ export interface ProtocolTraceEntry {
   correlationId?: string;
   responseTo?: string[];
   payloadSummary?: string;
+  verificationMode?: boolean;
+  manualVerification?: boolean;
+  verificationScenarioId?: VerificationScenarioId;
+  verificationScenarioLabel?: string;
+  verificationStage?: 'action' | 'primary' | 'fallback' | 'evidence' | 'note';
+  explicitVerifiedSignal?: boolean;
 }
 
 export interface SendMessageInput {
@@ -44,6 +61,13 @@ export interface SendMessageInput {
 export interface StopRunInput {
   runId?: string;
   sessionId?: string;
+}
+
+export interface VerificationScenarioRequest {
+  scenarioId: VerificationScenarioId;
+  sessionId?: string;
+  runId?: string;
+  content?: string;
 }
 
 export interface GatewaySnapshot {
@@ -160,5 +184,6 @@ export interface GatewayClient {
     clientMessageId?: string;
     assistantPlaceholderId?: string;
   }>;
+  runVerificationScenario: (request: VerificationScenarioRequest) => Promise<void>;
   getSnapshot: () => GatewaySnapshot;
 }

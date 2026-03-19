@@ -209,8 +209,13 @@ export function SettingsPage() {
               <span>Telemetry</span>
               <span>{settings.advanced.telemetry ? 'On' : 'Off'}</span>
             </button>
+            <button type="button" className="button-secondary w-full justify-between" onClick={() => toggleAdvanced('protocolVerification')}>
+              <span>Protocol verification mode</span>
+              <span>{settings.advanced.protocolVerification ? 'On' : 'Off'}</span>
+            </button>
             <div className="rounded-md border border-app-border bg-app-panelAlt p-3 text-xs text-app-muted">
-              {loadingProjects ? 'Projects are refreshing for the active root/runtime settings.' : 'Saving a new root list refreshes Projects immediately.'}
+              <p>{loadingProjects ? 'Projects are refreshing for the active root/runtime settings.' : 'Saving a new root list refreshes Projects immediately.'}</p>
+              <p className="mt-2">Protocol verification mode enables compact operator-triggered gateway probes in Logs without changing the normal Sessions/Projects flows.</p>
               {projectError ? <p className="mt-2 text-app-danger">Latest Projects status: {projectError}</p> : null}
             </div>
           </div>

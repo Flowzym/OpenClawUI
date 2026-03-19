@@ -317,5 +317,6 @@ export const mockSettings: AppSettings = {
   advanced: {
     reconnect: true,
     telemetry: false,
+    protocolVerification: false,
   },
 };
