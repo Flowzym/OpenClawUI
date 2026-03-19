@@ -5,6 +5,8 @@ import type { Connect, Plugin } from 'vite';
 import type { Project, ProjectFile } from './src/types';
 
 const FILE_BRIDGE_HEADER = 'x-openclaw-file-bridge';
+const FILE_BRIDGE_RUNTIME_HEADER = 'x-openclaw-file-bridge-runtime';
+const LOCAL_RUNTIME_MODE = 'vite-dev-server';
 const DEFAULT_IGNORES = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.turbo']);
 
 interface BridgeProject extends Project {
@@ -22,7 +24,8 @@ interface RequestBody {
 const sendJson = (res: ServerResponse, statusCode: number, payload: unknown) => {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader(FILE_BRIDGE_HEADER, 'active');
+  res.setHeader(FILE_BRIDGE_HEADER, 'local-dev-bridge');
+  res.setHeader(FILE_BRIDGE_RUNTIME_HEADER, LOCAL_RUNTIME_MODE);
   res.end(JSON.stringify(payload));
 };
 
@@ -162,12 +165,22 @@ const createMiddleware = (): Connect.NextHandleFunction => async (req, res, next
 
   try {
     const requestPath = req.url.replace(/\?.*$/, '');
+
+    if (req.method === 'GET' && requestPath === '/api/file-bridge/status') {
+      sendJson(res, 200, {
+        mode: 'local-dev-bridge',
+        runtime: LOCAL_RUNTIME_MODE,
+        detail: 'Filesystem access is available through the local Vite middleware bridge.',
+      });
+      return;
+    }
+
     const body = await readBody(req);
 
     if (req.method === 'POST' && requestPath === '/api/file-bridge/projects') {
       const roots = body.roots ?? [];
       const projects = await Promise.all(roots.map(buildProject));
-      sendJson(res, 200, { projects });
+      sendJson(res, 200, { projects, runtime: LOCAL_RUNTIME_MODE });
       return;
     }
 
@@ -179,7 +192,7 @@ const createMiddleware = (): Connect.NextHandleFunction => async (req, res, next
 
       const resolvedRootPath = await resolveRootPath(body.rootPath);
       const files = await readTree(body.rootPath, resolvedRootPath);
-      sendJson(res, 200, { files });
+      sendJson(res, 200, { files, runtime: LOCAL_RUNTIME_MODE });
       return;
     }
 
@@ -203,6 +216,7 @@ const createMiddleware = (): Connect.NextHandleFunction => async (req, res, next
           updatedAt: stats.mtime.toISOString(),
           size: stats.size,
         },
+        runtime: LOCAL_RUNTIME_MODE,
       });
       return;
     }
@@ -228,6 +242,7 @@ const createMiddleware = (): Connect.NextHandleFunction => async (req, res, next
           updatedAt: stats.mtime.toISOString(),
           size: stats.size,
         },
+        runtime: LOCAL_RUNTIME_MODE,
       });
       return;
     }
@@ -241,7 +256,8 @@ const createMiddleware = (): Connect.NextHandleFunction => async (req, res, next
 };
 
 export const openClawFileBridge = (): Plugin => ({
-  name: 'openclaw-file-bridge',
+  name: 'openclaw-local-dev-file-bridge',
+  apply: 'serve',
   configureServer(server) {
     server.middlewares.use(createMiddleware());
   },

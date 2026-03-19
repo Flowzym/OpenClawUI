@@ -9,9 +9,12 @@ export interface FileDocument {
   size: number;
 }
 
+export type FileServiceBridgeKind = 'local-dev-bridge' | 'bridge-unavailable' | 'mock-fallback';
+
 export interface FileServiceBridgeStatus {
-  kind: 'bridge' | 'mock-fallback';
-  reason?: string;
+  kind: FileServiceBridgeKind;
+  label: string;
+  detail: string;
 }
 
 export interface ListProjectsOptions {
@@ -41,6 +44,7 @@ export interface BuildDiffRequest {
 
 export interface FileService {
   getStatus: () => FileServiceBridgeStatus;
+  initializeRuntime: () => Promise<FileServiceBridgeStatus>;
   listProjects: (options: ListProjectsOptions) => Promise<Project[]>;
   listProjectTree: (request: ProjectTreeRequest) => Promise<ProjectFile[]>;
   openFile: (request: FileRequest) => Promise<FileDocument>;
