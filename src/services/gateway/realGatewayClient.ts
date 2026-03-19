@@ -18,7 +18,8 @@ const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
 const SESSION_REQUEST_TIMEOUT_MS = 4000;
 const HEARTBEAT_INTERVAL_MS = 15000;
 const HANDSHAKE_NOTICE_TIMEOUT_MS = 4000;
-const HANDSHAKE_BOOTSTRAP_DELAY_MS = 350;
+const HANDSHAKE_FALLBACK_DELAY_MS = 350;
+const HANDSHAKE_BOOTSTRAP_DELAY_MS = 650;
 const SEND_MESSAGE_FALLBACK_DELAY_MS = 650;
 const TRACE_LIMIT = 80;
 const RESPONSE_CORRELATION_WINDOW_MS = 5000;
@@ -33,6 +34,7 @@ interface SendOptions {
   strategy: OutboundCommandStrategy;
   strategyReason?: string;
   commandGroup?: string;
+  attemptContext?: string;
   linkedAttemptId?: string;
   correlationId?: string;
 }
@@ -53,10 +55,17 @@ class RealGatewayClient implements GatewayClient {
   private protocolTrace: ProtocolTraceEntry[] = [];
   private recentOutboundTrace: ProtocolTraceEntry[] = [];
   private recentInboundSignals: Array<{ at: number; correlationId?: string; responseTo?: string[] }> = [];
+  private currentInboundResponseTo: string[] | null = null;
+  private lastHandshakePrimaryTraceId: string | null = null;
+  private lastHandshakeFallbackTraceId: string | null = null;
+  private bootstrapRequested = false;
+  private subscribeRequested = false;
+  private lastCurrentRunRequestTraceId: string | null = null;
   private snapshot: GatewaySnapshot = {
     connectionState: 'disconnected',
     handshakePhase: 'idle',
     currentRun: null,
+    currentRunSource: 'none',
     sessions: [],
     dataSource: 'none',
     usingMockFallback: false,
@@ -198,17 +207,23 @@ class RealGatewayClient implements GatewayClient {
   async getCurrentRun(): Promise<RunInfo | null> {
     if (this.socket?.readyState === WebSocket.OPEN) {
       // TODO(openclaw-protocol): Verify the current-run request schema accepted by the real gateway.
-      this.safeSend(
+      const traceId = this.safeSend(
         { type: 'run.current' },
         {
           note: 'exploratory current run command',
           commandKind: 'run.current',
           purpose: 'request current run snapshot',
+          variant: 'primary',
           strategy: 'primary',
           strategyReason: 'Single exploratory current-run request retained until the gateway exposes a confirmed alternate schema.',
           commandGroup: 'run.current',
+          attemptContext:
+            this.snapshot.handshakePhase === 'ready'
+              ? 'Requested after handshake bootstrap to ask the gateway for an explicit current-run snapshot.'
+              : 'Requested during exploratory bootstrap so current-run state can be compared against later unsolicited run events.',
         },
       );
+      this.lastCurrentRunRequestTraceId = typeof traceId === 'string' ? traceId : null;
     }
 
     return this.snapshot.currentRun;
@@ -379,6 +394,12 @@ class RealGatewayClient implements GatewayClient {
   private beginHandshake() {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
 
+    this.bootstrapRequested = false;
+    this.subscribeRequested = false;
+    this.lastHandshakePrimaryTraceId = null;
+    this.lastHandshakeFallbackTraceId = null;
+    this.lastCurrentRunRequestTraceId = null;
+
     this.transitionConnection('connecting', {
       handshakePhase: 'handshake_sent',
       diagnostics: ['Socket open.', 'Sending exploratory initialization messages while protocol details are verified.'],
@@ -386,7 +407,7 @@ class RealGatewayClient implements GatewayClient {
     });
 
     // TODO(openclaw-protocol): Verify the exact connect/auth/init payload required by the gateway before considering the socket ready.
-    this.safeSend(
+    const primaryTraceId = this.safeSend(
       { type: 'gateway.connect', payload: {} },
       {
         note: 'exploratory gateway.connect handshake',
@@ -394,23 +415,39 @@ class RealGatewayClient implements GatewayClient {
         purpose: 'attempt protocol handshake',
         variant: 'primary',
         strategy: 'primary',
-        strategyReason: 'Preferred exploratory handshake guess while explicit gateway readiness remains unverified.',
+        strategyReason: 'Preferred exploratory handshake guess because the current protocol evidence leans toward dotted command types with payload envelopes.',
         commandGroup: 'handshake',
+        attemptContext: 'Sent immediately after socket open to seek an explicit gateway handshake acknowledgement before any bootstrap assumptions.',
       },
     );
-    // TODO(openclaw-protocol): Verify whether the real gateway expects an auth/init envelope instead of the guessed type above.
-    this.safeSend(
-      { action: 'connect', capabilities: ['sessions', 'messages', 'runs', 'logs'] },
-      {
-        note: 'exploratory connect handshake',
-        commandKind: 'connect',
-        purpose: 'attempt protocol handshake',
-        variant: 'fallback',
-        strategy: 'fallback',
-        strategyReason: 'Small retained fallback because the connect/auth envelope is still unconfirmed.',
-        commandGroup: 'handshake',
-      },
-    );
+    this.lastHandshakePrimaryTraceId = typeof primaryTraceId === 'string' ? primaryTraceId : null;
+
+    if (this.lastHandshakePrimaryTraceId) {
+      window.setTimeout(() => {
+        if (!this.shouldSendHandshakeFallback(this.lastHandshakePrimaryTraceId!)) {
+          return;
+        }
+
+        // TODO(openclaw-protocol): Verify whether the real gateway expects an auth/init envelope instead of the guessed type above.
+        const fallbackTraceId = this.safeSend(
+          { action: 'connect', capabilities: ['sessions', 'messages', 'runs', 'logs'] },
+          {
+            note: 'exploratory connect handshake fallback',
+            commandKind: 'connect',
+            purpose: 'attempt protocol handshake',
+            variant: 'fallback',
+            strategy: 'fallback',
+            strategyReason:
+              'Retained only as a delayed fallback because the connect/auth envelope is still unconfirmed and no inbound signal has correlated with the preferred handshake attempt yet.',
+            commandGroup: 'handshake',
+            attemptContext:
+              'Sent only after the preferred gateway.connect attempt remained unverified long enough to justify one bounded fallback guess.',
+            linkedAttemptId: this.lastHandshakePrimaryTraceId,
+          },
+        );
+        this.lastHandshakeFallbackTraceId = typeof fallbackTraceId === 'string' ? fallbackTraceId : null;
+      }, HANDSHAKE_FALLBACK_DELAY_MS);
+    }
 
     this.clearHandshakeTimer();
     this.handshakeTimer = window.setTimeout(() => {
@@ -426,7 +463,7 @@ class RealGatewayClient implements GatewayClient {
       }
     }, HANDSHAKE_NOTICE_TIMEOUT_MS);
 
-    window.setTimeout(() => this.requestBootstrapData(), HANDSHAKE_BOOTSTRAP_DELAY_MS);
+    window.setTimeout(() => this.requestBootstrapData('handshake bootstrap window elapsed'), HANDSHAKE_BOOTSTRAP_DELAY_MS);
     this.startHeartbeat();
   }
 
@@ -480,7 +517,9 @@ class RealGatewayClient implements GatewayClient {
         parseCategory === 'parse_failure' || parseCategory === 'unknown_raw' ? 'warn' : 'info',
         `Gateway parser result [${parseCategory}] ${this.describeInboundEvent(event)}`,
       );
+      this.currentInboundResponseTo = responseTo ?? null;
       this.applyEvent(event);
+      this.currentInboundResponseTo = null;
       this.emit(event);
     }
   }
@@ -516,6 +555,15 @@ class RealGatewayClient implements GatewayClient {
         break;
       case 'run':
         this.snapshot.currentRun = event.run;
+        this.snapshot.currentRunSource = event.run
+          ? this.wasCurrentRunLikelyRequested(this.currentInboundResponseTo) ? 'explicit_request' : 'inbound_event'
+          : 'none';
+        this.pushLog(
+          'info',
+          event.run
+            ? `Current run updated from ${this.snapshot.currentRunSource === 'explicit_request' ? 'an explicit run.current request' : 'an inbound run event'}.`
+            : 'Current run cleared by inbound gateway data.',
+        );
         this.setGatewayDataMode('gateway', event.confidence);
         if (event.run?.sessionId) {
           this.patchSession(event.run.sessionId, { status: event.run.status, updatedAt: new Date().toISOString() });
@@ -556,22 +604,37 @@ class RealGatewayClient implements GatewayClient {
     }
   }
 
-  private requestBootstrapData() {
+  private requestBootstrapData(reason: string) {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
+    if (this.bootstrapRequested) return;
+
+    this.bootstrapRequested = true;
+
+    const bootstrapMode = this.snapshot.handshakePhase === 'ready' ? 'post-handshake bootstrap' : 'degraded exploratory bootstrap';
+    this.pushLog(
+      'info',
+      `Starting ${bootstrapMode}; subscribe/current-run/session requests remain exploratory until the gateway emits an explicit verified handshake acknowledgement.`,
+    );
 
     // TODO(openclaw-protocol): Verify the subscription message and topic names supported by the real gateway.
-    this.safeSend(
-      { type: 'subscribe', payload: { topics: ['sessions', 'messages', 'runs', 'logs'] } },
-      {
-        note: 'exploratory subscribe command',
-        commandKind: 'subscribe',
-        purpose: 'request stream subscriptions',
-        variant: 'primary',
-        strategy: 'primary',
-        strategyReason: 'Single exploratory subscribe request retained because there is no concrete evidence for an alternate topic-subscription envelope yet.',
-        commandGroup: 'subscribe',
-      },
-    );
+    if (this.shouldRequestSubscribe()) {
+      const subscribeTraceId = this.safeSend(
+        { type: 'subscribe', payload: { topics: ['sessions', 'messages', 'runs', 'logs'] } },
+        {
+          note: 'exploratory subscribe command',
+          commandKind: 'subscribe',
+          purpose: 'request stream subscriptions',
+          variant: 'primary',
+          strategy: 'primary',
+          strategyReason: 'Single exploratory subscribe request retained because there is no concrete evidence for an alternate topic-subscription envelope yet.',
+          commandGroup: 'subscribe',
+          attemptContext: `Issued during ${bootstrapMode} because live observations still suggest subscriptions may be needed before session/run streams appear. Trigger: ${reason}.`,
+          linkedAttemptId: this.lastHandshakeFallbackTraceId ?? this.lastHandshakePrimaryTraceId ?? undefined,
+        },
+      );
+      this.subscribeRequested = typeof subscribeTraceId === 'string';
+    }
+
     void this.requestSessionsSnapshot();
     void this.getCurrentRun();
   }
@@ -603,9 +666,14 @@ class RealGatewayClient implements GatewayClient {
           note: 'exploratory sessions.list command',
           commandKind: 'sessions.list',
           purpose: 'request session snapshot',
+          variant: 'primary',
           strategy: 'primary',
           strategyReason: 'Only the sessions.list request is retained; no extra guessed list variant is sent without protocol evidence.',
           commandGroup: 'sessions.list',
+          attemptContext:
+            this.snapshot.handshakePhase === 'ready'
+              ? 'Requested during bootstrap after a verified handshake signal to obtain an explicit session snapshot.'
+              : 'Requested during exploratory bootstrap to narrow session state without treating the connection as verified.',
         },
       );
     });
@@ -634,9 +702,18 @@ class RealGatewayClient implements GatewayClient {
         strategy: options.strategy,
         strategyReason: options.strategyReason,
         commandGroup: options.commandGroup,
+        attemptContext: options.attemptContext,
         linkedAttemptId: options.linkedAttemptId,
         correlationId: options.correlationId,
-        summary: `${options.commandKind} → ${options.purpose}`,
+        summary: [
+          options.commandGroup ? `[${options.commandGroup}]` : null,
+          options.commandKind,
+          options.variant ? `(${options.variant})` : null,
+          `→ ${options.purpose}`,
+          options.attemptContext ? `— ${options.attemptContext}` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
         payloadSummary: summarizeRawPayload(payload),
       });
       return traceEntry.id;
@@ -710,6 +787,31 @@ class RealGatewayClient implements GatewayClient {
     return !this.recentInboundSignals.some(
       (entry) => entry.correlationId === correlationId || Boolean(entry.responseTo?.includes(primaryTraceId)),
     );
+  }
+
+  private shouldSendHandshakeFallback(primaryTraceId: string) {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    if (this.snapshot.handshakePhase === 'ready' || this.snapshot.protocolConfidence === 'verified') return false;
+
+    const now = Date.now();
+    this.recentInboundSignals = this.recentInboundSignals.filter((entry) => now - entry.at <= RESPONSE_CORRELATION_WINDOW_MS);
+
+    return !this.recentInboundSignals.some((entry) => Boolean(entry.responseTo?.includes(primaryTraceId)));
+  }
+
+  private shouldRequestSubscribe() {
+    if (this.subscribeRequested) return false;
+    return ['handshake_sent', 'ready', 'degraded'].includes(this.snapshot.handshakePhase);
+  }
+
+  private wasCurrentRunLikelyRequested(responseTo?: string[] | string | null) {
+    if (!this.lastCurrentRunRequestTraceId) return false;
+
+    if (typeof responseTo === 'string') {
+      return responseTo === this.lastCurrentRunRequestTraceId;
+    }
+
+    return Boolean(responseTo?.includes(this.lastCurrentRunRequestTraceId));
   }
 
   private describeInboundEvent(event: GatewayEvent) {
@@ -893,8 +995,16 @@ class RealGatewayClient implements GatewayClient {
     this.resolveSessionRequests([]);
     this.protocolTrace = [];
     this.recentOutboundTrace = [];
+    this.recentInboundSignals = [];
+    this.currentInboundResponseTo = null;
+    this.lastHandshakePrimaryTraceId = null;
+    this.lastHandshakeFallbackTraceId = null;
+    this.bootstrapRequested = false;
+    this.subscribeRequested = false;
+    this.lastCurrentRunRequestTraceId = null;
     this.snapshot.sessions = [];
     this.snapshot.currentRun = null;
+    this.snapshot.currentRunSource = 'none';
     this.snapshot.dataSource = 'none';
     this.snapshot.usingMockFallback = false;
     this.snapshot.lastHeartbeat = null;
@@ -975,6 +1085,7 @@ class RealGatewayClient implements GatewayClient {
 
     this.snapshot.sessions = [];
     this.snapshot.currentRun = null;
+    this.snapshot.currentRunSource = 'none';
     this.snapshot.usingMockFallback = true;
     this.snapshot.dataSource = 'fallback';
     this.snapshot.protocolConfidence = 'exploratory';
@@ -1032,6 +1143,7 @@ class RealGatewayClient implements GatewayClient {
       this.snapshot.protocolConfidence = confidence ?? this.snapshot.protocolConfidence;
     }
   }
+
 
   private upsertSession(session: Session) {
     const index = this.snapshot.sessions.findIndex((item) => item.id === session.id);

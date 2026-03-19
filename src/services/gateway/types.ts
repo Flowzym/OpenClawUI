@@ -26,6 +26,7 @@ export interface ProtocolTraceEntry {
   strategy?: OutboundCommandStrategy;
   strategyReason?: string;
   commandGroup?: string;
+  attemptContext?: string;
   linkedAttemptId?: string;
   correlationId?: string;
   responseTo?: string[];
@@ -49,6 +50,7 @@ export interface GatewaySnapshot {
   connectionState: ConnectionState;
   handshakePhase: HandshakePhase;
   currentRun: RunInfo | null;
+  currentRunSource: 'none' | 'explicit_request' | 'inbound_event';
   sessions: Session[];
   dataSource: GatewayDataSource;
   usingMockFallback: boolean;
