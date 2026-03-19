@@ -93,6 +93,8 @@ export interface DiffChunk {
 
 export interface ChangeItem {
   id: string;
+  projectId?: string;
+  rootPath?: string;
   filePath: string;
   status: 'modified' | 'added' | 'deleted';
   summary: string;
