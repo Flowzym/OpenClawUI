@@ -4,6 +4,7 @@ export type ProtocolConfidence = 'verified' | 'exploratory';
 export type GatewayDataSource = 'gateway' | 'fallback' | 'none';
 export type HandshakePhase = 'idle' | 'socket_open' | 'handshake_sent' | 'ready' | 'degraded' | 'failed';
 export type ProtocolParseCategory = 'verified_parse' | 'exploratory_parse' | 'unknown_raw' | 'parse_failure';
+export type OutboundCommandStrategy = 'verified' | 'primary' | 'fallback' | 'disabled';
 export type DiagnosticEventKind =
   | 'unknown_raw_event'
   | 'parse_failure'
@@ -22,6 +23,10 @@ export interface ProtocolTraceEntry {
   commandKind?: string;
   purpose?: string;
   variant?: string;
+  strategy?: OutboundCommandStrategy;
+  strategyReason?: string;
+  commandGroup?: string;
+  linkedAttemptId?: string;
   correlationId?: string;
   responseTo?: string[];
   payloadSummary?: string;

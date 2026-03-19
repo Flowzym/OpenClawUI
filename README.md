@@ -112,10 +112,16 @@ Verified inbound signals today:
 
 Still exploratory outbound commands:
 
-- Handshake/init guesses: `gateway.connect`, fallback `connect`.
-- Subscription/session/run guesses: `subscribe`, `sessions.list`, `run.current`, `run.stop`.
-- Message send guesses: primary `session.message`, fallback `send_message`.
+- Handshake/init guesses: preferred `gateway.connect`, small retained fallback `connect`.
+- Subscription/session/run guesses: preferred `subscribe`, `sessions.list`, `run.current`, `run.stop`.
+- Message send guesses: preferred `session.message`, with the `send_message` fallback only staged when the socket is still exploratory and no correlated inbound response is observed after the primary attempt.
 - Transport liveness guess: application-level `ping`.
+
+Outbound command consolidation is now in progress:
+
+- `sendMessage` uses an explicit preferred-vs-fallback strategy instead of unconditionally sending both guessed variants.
+- `sessions.list` and `run.stop` now remain single-variant exploratory commands with trace metadata that explains why no extra guessed fallback is being sent yet.
+- Protocol trace rows now surface the outbound command strategy (`primary`, `fallback`, etc.), why that strategy was used, and when a fallback attempt was linked to an earlier primary attempt.
 
 How to test locally:
 

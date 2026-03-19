@@ -56,17 +56,20 @@ export function LiveLogConsole() {
               <p className="text-app-muted">No protocol trace yet. Connect to start recording gateway traffic.</p>
             ) : (
               protocolTrace.map((entry) => (
-                <div key={entry.id} className="grid grid-cols-[70px_92px_112px_88px_92px_minmax(0,1fr)] gap-2 border-b border-app-border/50 py-1 last:border-b-0">
+                <div key={entry.id} className="grid grid-cols-[70px_92px_112px_88px_96px_minmax(0,1fr)] gap-2 border-b border-app-border/50 py-1 last:border-b-0">
                   <span className="text-app-muted">{entry.direction}</span>
                   <span className="text-app-muted">{entry.handshakePhase}</span>
                   <span className={entry.confidence === 'verified' ? 'text-app-success' : 'text-app-warn'}>{entry.confidence}</span>
                   <span className="text-app-muted">{entry.parseCategory ?? 'outbound'}</span>
-                  <span className="text-app-muted">{entry.commandKind ?? 'event'}</span>
+                  <span className="text-app-muted">{entry.strategy ?? entry.commandKind ?? 'event'}</span>
                   <div className="min-w-0 text-app-text">
                     <p className="truncate">{entry.summary}</p>
                     <p className="truncate text-app-muted">
+                      {entry.commandKind ? `${entry.commandKind}${entry.commandGroup ? `/${entry.commandGroup}` : ''} · ` : ''}
                       {entry.variant ? `${entry.variant} · ` : ''}
                       {entry.payloadSummary ?? 'no payload summary'}
+                      {entry.strategyReason ? ` · ${entry.strategyReason}` : ''}
+                      {entry.linkedAttemptId ? ` · ↪ ${entry.linkedAttemptId}` : ''}
                       {entry.responseTo?.length ? ` · ↩ ${entry.responseTo.join(', ')}` : ''}
                     </p>
                   </div>
