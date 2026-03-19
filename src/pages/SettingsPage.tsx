@@ -1,8 +1,16 @@
 import { Panel } from '../components/shared/Panel';
+import { useProjectsStore } from '../stores/projectsStore';
 import { useSettingsStore } from '../stores/settingsStore';
+
+const bridgeTone = {
+  'local-dev-bridge': 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  'bridge-unavailable': 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+  'mock-fallback': 'border-app-danger/40 bg-app-danger/10 text-app-danger',
+} as const;
 
 export function SettingsPage() {
   const { settings, updateGatewayUrl, toggleTheme, toggleAdvanced } = useSettingsStore();
+  const bridgeStatus = useProjectsStore((state) => state.bridgeStatus);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -27,13 +35,22 @@ export function SettingsPage() {
         </div>
       </Panel>
       <div className="space-y-4">
-        <Panel title="Project roots" subtitle="Placeholder list for future Windows workspace discovery.">
+        <Panel title="Project roots" subtitle="Configured local Windows or WSL roots used by the explicit local bridge runtime.">
           <div className="space-y-2">
             {settings.projectRoots.map((root) => (
               <div key={root} className="rounded-md border border-app-border bg-app-panelAlt px-3 py-2 font-mono text-xs">
                 {root}
               </div>
             ))}
+          </div>
+        </Panel>
+        <Panel title="File runtime" subtitle="Operator-visible file access mode for this UI session.">
+          <div className={`rounded-md border px-3 py-3 text-xs ${bridgeTone[bridgeStatus.kind]}`}>
+            <p className="section-title text-current">{bridgeStatus.label}</p>
+            <p className="mt-2 leading-5 text-current/90">{bridgeStatus.detail}</p>
+            <p className="mt-3 text-current/80">
+              Supported mode today: run the UI with <span className="font-mono">npm run dev</span> so the local Vite bridge can serve filesystem requests.
+            </p>
           </div>
         </Panel>
         <Panel title="Advanced settings" subtitle="Placeholders for reconnection and telemetry behavior.">

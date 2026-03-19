@@ -14,15 +14,34 @@ interface BridgeErrorPayload {
 }
 
 const BRIDGE_BASE = '/api/file-bridge';
-const FALLBACK_HEADER = 'x-openclaw-file-bridge';
+const BRIDGE_HEADER = 'x-openclaw-file-bridge';
+const BRIDGE_RUNTIME_HEADER = 'x-openclaw-file-bridge-runtime';
+
+const createBridgeUnavailableStatus = (detail: string): FileServiceBridgeStatus => ({
+  kind: 'bridge-unavailable',
+  label: 'Bridge unavailable',
+  detail,
+});
+
+const createLocalBridgeStatus = (runtime: string | null): FileServiceBridgeStatus => ({
+  kind: 'local-dev-bridge',
+  label: 'Local dev bridge active',
+  detail: runtime
+    ? `Filesystem access is served by the local Vite bridge runtime (${runtime}).`
+    : 'Filesystem access is served by the local Vite bridge runtime.',
+});
+
+const createRuntimeError = (status: FileServiceBridgeStatus) => new Error(status.detail);
 
 const parseBridgeStatus = (response: Response): FileServiceBridgeStatus => {
-  const value = response.headers.get(FALLBACK_HEADER);
-  if (value === 'active') return { kind: 'bridge' };
-  return {
-    kind: 'mock-fallback',
-    reason: 'HTTP file bridge header missing from local Vite server response.',
-  };
+  const bridgeMode = response.headers.get(BRIDGE_HEADER);
+  const runtime = response.headers.get(BRIDGE_RUNTIME_HEADER);
+
+  if (bridgeMode === 'local-dev-bridge') {
+    return createLocalBridgeStatus(runtime);
+  }
+
+  return createBridgeUnavailableStatus('The response did not come from the local Vite file bridge runtime.');
 };
 
 const requestJson = async <TResponse>(input: RequestInfo, init?: RequestInit) => {
@@ -36,6 +55,9 @@ const requestJson = async <TResponse>(input: RequestInfo, init?: RequestInit) =>
 
   const bridgeStatus = parseBridgeStatus(response);
   const payload = (await response.json()) as TResponse | BridgeErrorPayload;
+  if (bridgeStatus.kind !== 'local-dev-bridge') {
+    throw createRuntimeError(bridgeStatus);
+  }
   if (!response.ok) {
     throw new Error((payload as BridgeErrorPayload).error ?? 'File bridge request failed.');
   }
@@ -52,7 +74,7 @@ const postJson = <TResponse>(path: string, body: unknown) => requestJson<TRespon
 });
 
 class HttpFileService implements FileService {
-  private status: FileServiceBridgeStatus = { kind: 'bridge' };
+  private status: FileServiceBridgeStatus = createBridgeUnavailableStatus('Bridge probe has not run yet.');
 
   getStatus() {
     return this.status;
@@ -60,6 +82,40 @@ class HttpFileService implements FileService {
 
   private updateStatus(next: FileServiceBridgeStatus) {
     this.status = next;
+  }
+
+  async initializeRuntime() {
+    try {
+      const response = await fetch(`${BRIDGE_BASE}/status`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+      const nextStatus = parseBridgeStatus(response);
+      if (nextStatus.kind !== 'local-dev-bridge') {
+        this.updateStatus(nextStatus);
+        return nextStatus;
+      }
+
+      if (!response.ok) {
+        const payload = (await response.json()) as BridgeErrorPayload;
+        const unavailable = createBridgeUnavailableStatus(payload.error ?? 'The local Vite bridge status probe failed.');
+        this.updateStatus(unavailable);
+        return unavailable;
+      }
+
+      this.updateStatus(nextStatus);
+      return nextStatus;
+    } catch (error) {
+      const unavailable = createBridgeUnavailableStatus(
+        error instanceof Error
+          ? `Could not reach /api/file-bridge/status on the local Vite dev server: ${error.message}`
+          : 'Could not reach /api/file-bridge/status on the local Vite dev server.',
+      );
+      this.updateStatus(unavailable);
+      return unavailable;
+    }
   }
 
   async listProjects(options: ListProjectsOptions) {

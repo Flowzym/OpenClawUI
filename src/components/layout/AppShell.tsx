@@ -18,7 +18,7 @@ export function AppShell() {
   const disconnectGateway = useConnectionStore((state) => state.disconnect);
   const initializeSessions = useSessionStore((state) => state.initialize);
   const startLogStream = useLogsStore((state) => state.startStream);
-  const loadProjects = useProjectsStore((state) => state.loadProjects);
+  const initializeProjects = useProjectsStore((state) => state.initializeProjects);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -41,8 +41,8 @@ export function AppShell() {
   }, [connectGateway, gatewayUrl]);
 
   useEffect(() => {
-    void loadProjects();
-  }, [loadProjects, projectRoots]);
+    void initializeProjects();
+  }, [initializeProjects, projectRoots]);
 
   useEffect(() => () => {
     void disconnectGateway();

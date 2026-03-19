@@ -37,12 +37,18 @@ const resolveMockDocument = (filePath: string): FileDocument => ({
   size: (fileMap[filePath] ?? '').length,
 });
 
+const mockStatus = {
+  kind: 'mock-fallback',
+  label: 'Mock fallback active',
+  detail: 'Local Vite bridge unavailable; using in-memory mock project data.',
+} as const;
+
 export const mockFileService: FileService = {
   getStatus() {
-    return {
-      kind: 'mock-fallback',
-      reason: 'Local file bridge unavailable; using in-memory mock data.',
-    };
+    return mockStatus;
+  },
+  async initializeRuntime() {
+    return mockStatus;
   },
   async listProjects() {
     return cloneProjects();

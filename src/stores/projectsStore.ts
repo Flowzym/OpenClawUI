@@ -28,9 +28,12 @@ interface ProjectsStore {
   loadingTree: boolean;
   bridgeStatus: FileServiceBridgeStatus;
   projectError?: string;
+  projectsInitialized: boolean;
+  initializedRootsKey: string;
   projectTrees: Record<string, ProjectFile[]>;
   openFiles: Record<string, OpenProjectFile>;
   changes: ChangeItem[];
+  initializeProjects: () => Promise<void>;
   selectProject: (projectId: string) => Promise<void>;
   selectFile: (filePath: string) => Promise<void>;
   toggleInspector: () => void;
@@ -46,6 +49,8 @@ interface ProjectsStore {
 }
 
 const getOpenFileKey = (projectId: string, filePath: string) => `${projectId}:${filePath}`;
+const normalizeRoots = (roots: string[]) => roots.map((root) => root.trim()).filter(Boolean);
+const rootsKeyFor = (roots: string[]) => normalizeRoots(roots).join('||');
 
 const updateProject = (projects: Project[], projectId: string, updater: (project: Project) => Project) =>
   projects.map((project) => (project.id === projectId ? updater(project) : project));
@@ -106,9 +111,19 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   loadingProjects: false,
   loadingTree: false,
   bridgeStatus: fileService.getStatus(),
+  projectsInitialized: false,
+  initializedRootsKey: '',
   projectTrees: {},
   openFiles: {},
   changes: [],
+  async initializeProjects() {
+    const roots = useSettingsStore.getState().settings.projectRoots;
+    const nextRootsKey = rootsKeyFor(roots);
+    const state = get();
+    if (state.loadingProjects) return;
+    if (state.projectsInitialized && state.initializedRootsKey === nextRootsKey) return;
+    await get().loadProjects();
+  },
   async selectProject(projectId) {
     set({ selectedProjectId: projectId, projectError: undefined });
     await get().loadProjectTree(projectId);
@@ -187,7 +202,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             savedContent: '',
             dirty: false,
             isLoading: false,
-            error: error instanceof Error ? error.message : 'Unable to read file through the local bridge.',
+            error: error instanceof Error ? error.message : 'Unable to read file through the active file runtime.',
           },
         },
         bridgeStatus: fileService.getStatus(),
@@ -199,19 +214,48 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     set((state) => ({ fileInspectorOpen: !state.fileInspectorOpen }));
   },
   async loadProjects() {
-    const roots = useSettingsStore.getState().settings.projectRoots;
+    const roots = normalizeRoots(useSettingsStore.getState().settings.projectRoots);
+    const initializedRootsKey = rootsKeyFor(roots);
     set({ loadingProjects: true, projectError: undefined });
+
+    const runtimeStatus = await fileService.initializeRuntime();
+    set({ bridgeStatus: runtimeStatus });
+
+    if (roots.length === 0) {
+      set({
+        projects: [],
+        selectedProjectId: '',
+        selectedFilePath: '',
+        loadingProjects: false,
+        projectsInitialized: true,
+        initializedRootsKey,
+        projectTrees: {},
+        openFiles: {},
+        changes: [],
+        projectError: 'No project roots are configured yet. Add local Windows/WSL roots in settings to load real projects.',
+      });
+      return;
+    }
 
     try {
       const projects = await fileService.listProjects({ roots });
-      const selectedProjectId = projects.find((project) => project.status === 'ready')?.id ?? projects[0]?.id ?? '';
+      const previousSelectedProjectId = get().selectedProjectId;
+      const selectedProjectId = projects.some((project) => project.id === previousSelectedProjectId)
+        ? previousSelectedProjectId
+        : projects.find((project) => project.status === 'ready')?.id ?? projects[0]?.id ?? '';
 
       set({
         projects,
         selectedProjectId,
         selectedFilePath: '',
         loadingProjects: false,
+        projectsInitialized: true,
+        initializedRootsKey,
         bridgeStatus: fileService.getStatus(),
+        projectTrees: {},
+        openFiles: {},
+        changes: [],
+        projectError: projects.length === 0 ? 'No projects matched the configured roots.' : undefined,
       });
 
       if (selectedProjectId) {
@@ -220,6 +264,8 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     } catch (error) {
       set({
         loadingProjects: false,
+        projectsInitialized: true,
+        initializedRootsKey,
         bridgeStatus: fileService.getStatus(),
         projectError: error instanceof Error ? error.message : 'Unable to load configured project roots.',
       });
@@ -244,6 +290,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
         })),
         loadingTree: false,
         bridgeStatus: fileService.getStatus(),
+        projectError: files.length === 0 ? 'This project root is available but currently empty.' : undefined,
       }));
     } catch (error) {
       set({
@@ -339,7 +386,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
           [fileKey]: {
             ...current,
             isLoading: false,
-            error: error instanceof Error ? error.message : 'Unable to save file through the local bridge.',
+            error: error instanceof Error ? error.message : 'Unable to save file through the active file runtime.',
           },
         },
         bridgeStatus: fileService.getStatus(),
@@ -393,7 +440,13 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     if (!file || file.error) return;
 
     await fileService.sendFileToSession({ filePath, content: file.content, sessionId });
-    const message = `Use this file as session context.\n\nPath: ${project.rootPath}/${filePath}\n\n\`\`\`${file.language}\n${file.content}\n\`\`\``;
+    const message = `Use this file as session context.
+
+Path: ${project.rootPath}/${filePath}
+
+\`\`\`${file.language}
+${file.content}
+\`\`\``;
     const sessionState = useSessionStore.getState();
     if (sessionState.selectedSessionId !== sessionId) {
       sessionState.selectSession(sessionId);
