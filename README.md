@@ -42,6 +42,26 @@ Current intended usage is local Windows + WSL development:
 2. Keep configured project roots pointed at local Windows repo paths that are reachable from WSL.
 3. Use the Projects page/runtime banner to confirm that the app is in `Local dev bridge active` mode before relying on real file reads or writes.
 
+
+## Local settings persistence
+
+- The UI stores operator settings in browser `localStorage` under `openclaw.operator-ui.settings.v1`.
+- Persisted values currently include the gateway URL, theme, configured project roots, and advanced reconnect/telemetry toggles.
+- If stored data is missing or malformed, the app falls back to the built-in defaults from the mock settings seed instead of failing startup.
+
+## Project roots workflow
+
+- Edit project roots from **Settings → Project roots** using add, inline edit, remove, and save actions.
+- Roots are trimmed and lightly normalized before save so accidental whitespace or trailing separators do not create obviously different entries.
+- Empty and duplicate entries are rejected when saving.
+- Saving a new root list clears the current Projects selection/tree/open file state and reloads the Projects workflow from the configured roots.
+
+## Runtime mode expectations after restart
+
+- On restart, the saved settings are restored first and then the file service probes the current runtime again.
+- If the app is started with `npm run dev` and the Vite bridge responds correctly, the UI should return to `local-dev-bridge`.
+- If the bridge is unavailable, the runtime status will honestly show `bridge-unavailable` during probing and then `mock-fallback` once demo/in-memory data takes over.
+
 ## Project structure
 
 ```text
@@ -94,9 +114,8 @@ Recommended path to continue hardening integrations:
 
 1. Confirm the exact OpenClaw gateway handshake, subscription, session-list, send-message, current-run, and stop-run payloads called out by `TODO(openclaw-protocol)` markers.
 2. Keep refining session/message reconciliation as more real gateway correlation fields are confirmed.
-3. Persist settings and project roots locally.
-4. Expand file bridge coverage beyond text-first tree/read/write operations.
-5. Add git-aware patch apply/review flows once the local edited-file workflow is stable.
+3. Expand file bridge coverage beyond text-first tree/read/write operations.
+4. Add git-aware patch apply/review flows once the local edited-file workflow is stable.
 
 ## MVP pages
 
@@ -119,4 +138,4 @@ Recommended path to continue hardening integrations:
 2. Add a non-Vite runtime only when there is a real backend/runtime contract for local file access.
 3. Expand verified protocol coverage for message/tool events once the gateway echoes stable correlation identifiers.
 4. Connect the changes workflow to actual diff/patch APIs so accept/reject/save actions mutate the repo state.
-5. Add persistence for settings, recent projects, and recent sessions to improve startup continuity.
+5. Add persistence for recent projects and recent sessions to improve startup continuity.
