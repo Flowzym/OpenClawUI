@@ -3,12 +3,29 @@ import type { ConnectionState, LogEntry, Message, RunInfo, Session, ToolEvent } 
 export type ProtocolConfidence = 'verified' | 'exploratory';
 export type GatewayDataSource = 'gateway' | 'fallback' | 'none';
 export type HandshakePhase = 'idle' | 'socket_open' | 'handshake_sent' | 'ready' | 'degraded' | 'failed';
+export type ProtocolParseCategory = 'verified_parse' | 'exploratory_parse' | 'unknown_raw' | 'parse_failure';
 export type DiagnosticEventKind =
   | 'unknown_raw_event'
   | 'parse_failure'
   | 'handshake_failure'
   | 'handshake_notice'
   | 'fallback_activated';
+
+export interface ProtocolTraceEntry {
+  id: string;
+  direction: 'outbound' | 'inbound';
+  recordedAt: string;
+  summary: string;
+  handshakePhase: HandshakePhase;
+  confidence: ProtocolConfidence;
+  parseCategory?: ProtocolParseCategory;
+  commandKind?: string;
+  purpose?: string;
+  variant?: string;
+  correlationId?: string;
+  responseTo?: string[];
+  payloadSummary?: string;
+}
 
 export interface SendMessageInput {
   sessionId?: string;
@@ -36,10 +53,12 @@ export interface GatewaySnapshot {
   diagnostics: string[];
   lastError?: string;
   protocolConfidence: ProtocolConfidence;
+  protocolTrace: ProtocolTraceEntry[];
 }
 
 interface GatewayEventBase {
   confidence: ProtocolConfidence;
+  parseCategory?: ProtocolParseCategory;
   raw?: unknown;
   note?: string;
   verificationSignal?: 'explicit_ack' | 'explicit_verified_flag' | 'heartbeat';
@@ -124,6 +143,7 @@ export interface GatewayClient {
   stopRun: (target?: string | StopRunInput) => Promise<void>;
   listSessions: () => Promise<Session[]>;
   subscribeLogs: (callback: (entry: LogEntry) => void) => () => void;
+  subscribeTrace: (callback: (entry: ProtocolTraceEntry) => void) => () => void;
   getCurrentRun: () => Promise<RunInfo | null>;
   subscribeEvents: (callback: (event: GatewayEvent) => void) => () => void;
   sendMessage: (input: SendMessageInput) => Promise<{
