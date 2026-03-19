@@ -7,6 +7,7 @@ import type {
   GatewayEvent,
   GatewaySnapshot,
   HandshakePhase,
+  OutboundCommandStrategy,
   ProtocolTraceEntry,
   SendMessageInput,
   StopRunInput,
@@ -18,6 +19,7 @@ const SESSION_REQUEST_TIMEOUT_MS = 4000;
 const HEARTBEAT_INTERVAL_MS = 15000;
 const HANDSHAKE_NOTICE_TIMEOUT_MS = 4000;
 const HANDSHAKE_BOOTSTRAP_DELAY_MS = 350;
+const SEND_MESSAGE_FALLBACK_DELAY_MS = 650;
 const TRACE_LIMIT = 80;
 const RESPONSE_CORRELATION_WINDOW_MS = 5000;
 
@@ -28,6 +30,10 @@ interface SendOptions {
   commandKind: string;
   purpose: string;
   variant?: string;
+  strategy: OutboundCommandStrategy;
+  strategyReason?: string;
+  commandGroup?: string;
+  linkedAttemptId?: string;
   correlationId?: string;
 }
 
@@ -46,6 +52,7 @@ class RealGatewayClient implements GatewayClient {
   private requestResolvers = new Set<(sessions: Session[]) => void>();
   private protocolTrace: ProtocolTraceEntry[] = [];
   private recentOutboundTrace: ProtocolTraceEntry[] = [];
+  private recentInboundSignals: Array<{ at: number; correlationId?: string; responseTo?: string[] }> = [];
   private snapshot: GatewaySnapshot = {
     connectionState: 'disconnected',
     handshakePhase: 'idle',
@@ -143,7 +150,17 @@ class RealGatewayClient implements GatewayClient {
     const payload = typeof target === 'string' ? { runId: target } : target ?? {};
 
     // TODO(openclaw-protocol): Verify the stop/abort command schema accepted by the real gateway.
-    this.safeSend({ type: 'run.stop', payload }, { note: 'exploratory stop run command', commandKind: 'run.stop', purpose: 'request run cancellation' });
+    this.safeSend(
+      { type: 'run.stop', payload },
+      {
+        note: 'exploratory stop run command',
+        commandKind: 'run.stop',
+        purpose: 'request run cancellation',
+        strategy: 'primary',
+        strategyReason: 'Only the dotted run.stop command is retained until the gateway confirms a competing stop schema.',
+        commandGroup: 'run.stop',
+      },
+    );
 
     const runId = payload.runId ?? this.snapshot.currentRun?.id;
     if (runId && this.snapshot.currentRun?.id === runId) {
@@ -181,7 +198,17 @@ class RealGatewayClient implements GatewayClient {
   async getCurrentRun(): Promise<RunInfo | null> {
     if (this.socket?.readyState === WebSocket.OPEN) {
       // TODO(openclaw-protocol): Verify the current-run request schema accepted by the real gateway.
-      this.safeSend({ type: 'run.current' }, { note: 'exploratory current run command', commandKind: 'run.current', purpose: 'request current run snapshot' });
+      this.safeSend(
+        { type: 'run.current' },
+        {
+          note: 'exploratory current run command',
+          commandKind: 'run.current',
+          purpose: 'request current run snapshot',
+          strategy: 'primary',
+          strategyReason: 'Single exploratory current-run request retained until the gateway exposes a confirmed alternate schema.',
+          commandGroup: 'run.current',
+        },
+      );
     }
 
     return this.snapshot.currentRun;
@@ -219,7 +246,7 @@ class RealGatewayClient implements GatewayClient {
     const assistantPlaceholderId = input.assistantPlaceholderId ?? `assistant-pending-${Date.now()}`;
 
     // TODO(openclaw-protocol): Verify the send-message command schema and whether client correlation IDs are echoed back.
-    this.safeSend(
+    const primaryTraceId = this.safeSend(
       {
         type: 'session.message',
         payload: {
@@ -234,26 +261,43 @@ class RealGatewayClient implements GatewayClient {
         commandKind: 'session.message',
         purpose: 'send operator message to a session',
         variant: 'primary',
+        strategy: 'primary',
+        strategyReason: 'Preferred exploratory send path because the current gateway traffic leans toward dotted command types with nested payload envelopes.',
+        commandGroup: 'sendMessage',
         correlationId: clientRequestId,
       },
     );
-    // TODO(openclaw-protocol): Verify whether the gateway expects snake_case action names instead of dotted types.
-    this.safeSend(
-      {
-        action: 'send_message',
-        session_id: sessionId,
-        content: input.content,
-        client_request_id: clientRequestId,
-        client_message_id: clientMessageId,
-      },
-      {
-        note: 'exploratory send_message action',
-        commandKind: 'send_message',
-        purpose: 'send operator message to a session',
-        variant: 'fallback',
-        correlationId: clientRequestId,
-      },
-    );
+
+    if (primaryTraceId && this.shouldStageSendMessageFallback()) {
+      window.setTimeout(() => {
+        if (!this.shouldSendMessageFallback(primaryTraceId, clientRequestId)) {
+          return;
+        }
+
+        // TODO(openclaw-protocol): Verify whether the gateway expects snake_case action names instead of dotted types.
+        this.safeSend(
+          {
+            action: 'send_message',
+            session_id: sessionId,
+            content: input.content,
+            client_request_id: clientRequestId,
+            client_message_id: clientMessageId,
+          },
+          {
+            note: 'exploratory send_message fallback action',
+            commandKind: 'send_message',
+            purpose: 'send operator message to a session',
+            variant: 'fallback',
+            strategy: 'fallback',
+            strategyReason:
+              'Fallback retained only while handshake/message correlation remain exploratory and no matching inbound response was observed after the primary send.',
+            commandGroup: 'sendMessage',
+            linkedAttemptId: primaryTraceId,
+            correlationId: clientRequestId,
+          },
+        );
+      }, SEND_MESSAGE_FALLBACK_DELAY_MS);
+    }
 
     return { sessionId, messageId: clientMessageId, clientRequestId, clientMessageId, assistantPlaceholderId };
   }
@@ -344,12 +388,28 @@ class RealGatewayClient implements GatewayClient {
     // TODO(openclaw-protocol): Verify the exact connect/auth/init payload required by the gateway before considering the socket ready.
     this.safeSend(
       { type: 'gateway.connect', payload: {} },
-      { note: 'exploratory gateway.connect handshake', commandKind: 'gateway.connect', purpose: 'attempt protocol handshake', variant: 'primary' },
+      {
+        note: 'exploratory gateway.connect handshake',
+        commandKind: 'gateway.connect',
+        purpose: 'attempt protocol handshake',
+        variant: 'primary',
+        strategy: 'primary',
+        strategyReason: 'Preferred exploratory handshake guess while explicit gateway readiness remains unverified.',
+        commandGroup: 'handshake',
+      },
     );
     // TODO(openclaw-protocol): Verify whether the real gateway expects an auth/init envelope instead of the guessed type above.
     this.safeSend(
       { action: 'connect', capabilities: ['sessions', 'messages', 'runs', 'logs'] },
-      { note: 'exploratory connect handshake', commandKind: 'connect', purpose: 'attempt protocol handshake', variant: 'fallback' },
+      {
+        note: 'exploratory connect handshake',
+        commandKind: 'connect',
+        purpose: 'attempt protocol handshake',
+        variant: 'fallback',
+        strategy: 'fallback',
+        strategyReason: 'Small retained fallback because the connect/auth envelope is still unconfirmed.',
+        commandGroup: 'handshake',
+      },
     );
 
     this.clearHandshakeTimer();
@@ -402,20 +462,20 @@ class RealGatewayClient implements GatewayClient {
     this.pushLog('info', `Gateway recv ${inboundSummary}`);
     for (const event of events) {
       const parseCategory = event.parseCategory ?? 'exploratory_parse';
+      const inboundCorrelationId =
+        ('clientRequestId' in event && typeof event.clientRequestId === 'string' ? event.clientRequestId : undefined) ??
+        ('correlationId' in event && typeof event.correlationId === 'string' ? event.correlationId : undefined);
+      const responseTo = this.findRecentOutboundMatches(inboundCorrelationId);
       this.recordTrace({
         direction: 'inbound',
         confidence: event.confidence,
         parseCategory,
         summary: this.describeInboundEvent(event),
         payloadSummary: inboundSummary,
-        correlationId:
-          ('clientRequestId' in event && typeof event.clientRequestId === 'string' ? event.clientRequestId : undefined) ??
-          ('correlationId' in event && typeof event.correlationId === 'string' ? event.correlationId : undefined),
-        responseTo: this.findRecentOutboundMatches(
-          ('clientRequestId' in event && typeof event.clientRequestId === 'string' ? event.clientRequestId : undefined) ??
-            ('correlationId' in event && typeof event.correlationId === 'string' ? event.correlationId : undefined),
-        ),
+        correlationId: inboundCorrelationId,
+        responseTo,
       });
+      this.noteInboundSignal(inboundCorrelationId, responseTo);
       this.pushLog(
         parseCategory === 'parse_failure' || parseCategory === 'unknown_raw' ? 'warn' : 'info',
         `Gateway parser result [${parseCategory}] ${this.describeInboundEvent(event)}`,
@@ -502,7 +562,15 @@ class RealGatewayClient implements GatewayClient {
     // TODO(openclaw-protocol): Verify the subscription message and topic names supported by the real gateway.
     this.safeSend(
       { type: 'subscribe', payload: { topics: ['sessions', 'messages', 'runs', 'logs'] } },
-      { note: 'exploratory subscribe command', commandKind: 'subscribe', purpose: 'request stream subscriptions', variant: 'primary' },
+      {
+        note: 'exploratory subscribe command',
+        commandKind: 'subscribe',
+        purpose: 'request stream subscriptions',
+        variant: 'primary',
+        strategy: 'primary',
+        strategyReason: 'Single exploratory subscribe request retained because there is no concrete evidence for an alternate topic-subscription envelope yet.',
+        commandGroup: 'subscribe',
+      },
     );
     void this.requestSessionsSnapshot();
     void this.getCurrentRun();
@@ -531,7 +599,14 @@ class RealGatewayClient implements GatewayClient {
       // TODO(openclaw-protocol): Verify the session-list request schema accepted by the real gateway.
       this.safeSend(
         { type: 'sessions.list' },
-        { note: 'exploratory sessions.list command', commandKind: 'sessions.list', purpose: 'request session snapshot' },
+        {
+          note: 'exploratory sessions.list command',
+          commandKind: 'sessions.list',
+          purpose: 'request session snapshot',
+          strategy: 'primary',
+          strategyReason: 'Only the sessions.list request is retained; no extra guessed list variant is sent without protocol evidence.',
+          commandGroup: 'sessions.list',
+        },
       );
     });
   }
@@ -548,19 +623,23 @@ class RealGatewayClient implements GatewayClient {
       this.socket.send(JSON.stringify(payload));
       this.pushLog(
         'info',
-        `Gateway send [${options.commandKind}] ${options.purpose}${options.variant ? ` (${options.variant} variant)` : ''}.`,
+        `Gateway send [${options.commandKind}] ${options.purpose}${options.variant ? ` (${options.variant} variant)` : ''}${options.strategyReason ? ` — ${options.strategyReason}` : ''}.`,
       );
-      this.recordTrace({
+      const traceEntry = this.recordTrace({
         direction: 'outbound',
         confidence: 'exploratory',
         commandKind: options.commandKind,
         purpose: options.purpose,
         variant: options.variant,
+        strategy: options.strategy,
+        strategyReason: options.strategyReason,
+        commandGroup: options.commandGroup,
+        linkedAttemptId: options.linkedAttemptId,
         correlationId: options.correlationId,
         summary: `${options.commandKind} → ${options.purpose}`,
         payloadSummary: summarizeRawPayload(payload),
       });
-      return true;
+      return traceEntry.id;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown send failure.';
       this.emit({
@@ -598,6 +677,7 @@ class RealGatewayClient implements GatewayClient {
     }
 
     this.traceSubscribers.forEach((subscriber) => subscriber(traceEntry));
+    return traceEntry;
   }
 
   private findRecentOutboundMatches(correlationId?: string) {
@@ -607,6 +687,29 @@ class RealGatewayClient implements GatewayClient {
       ? this.recentOutboundTrace.filter((entry) => entry.correlationId === correlationId).map((entry) => entry.id)
       : [];
     return exactMatches.length > 0 ? exactMatches : this.recentOutboundTrace.map((entry) => entry.id);
+  }
+
+  private noteInboundSignal(correlationId?: string, responseTo?: string[]) {
+    const now = Date.now();
+    this.recentInboundSignals = [
+      { at: now, correlationId, responseTo },
+      ...this.recentInboundSignals.filter((entry) => now - entry.at <= RESPONSE_CORRELATION_WINDOW_MS),
+    ];
+  }
+
+  private shouldStageSendMessageFallback() {
+    return this.snapshot.protocolConfidence !== 'verified' || this.snapshot.handshakePhase !== 'ready';
+  }
+
+  private shouldSendMessageFallback(primaryTraceId: string, correlationId: string) {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+
+    const now = Date.now();
+    this.recentInboundSignals = this.recentInboundSignals.filter((entry) => now - entry.at <= RESPONSE_CORRELATION_WINDOW_MS);
+
+    return !this.recentInboundSignals.some(
+      (entry) => entry.correlationId === correlationId || Boolean(entry.responseTo?.includes(primaryTraceId)),
+    );
   }
 
   private describeInboundEvent(event: GatewayEvent) {
@@ -696,7 +799,14 @@ class RealGatewayClient implements GatewayClient {
       // TODO(openclaw-protocol): Verify whether the real gateway accepts an application-level ping event.
       this.safeSend(
         { type: 'ping', timestamp: new Date().toISOString() },
-        { note: 'exploratory heartbeat ping', commandKind: 'ping', purpose: 'probe gateway liveness' },
+        {
+          note: 'exploratory heartbeat ping',
+          commandKind: 'ping',
+          purpose: 'probe gateway liveness',
+          strategy: 'primary',
+          strategyReason: 'Single liveness probe retained; no alternate heartbeat envelope has concrete evidence yet.',
+          commandGroup: 'ping',
+        },
       );
       this.emit({
         type: 'connection',
