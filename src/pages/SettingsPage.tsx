@@ -58,6 +58,7 @@ const hasNormalizedRoots = (value: ValidatedRoots): value is { normalizedRoots: 
 
 export function SettingsPage() {
   const { settings, updateGatewayUrl, toggleTheme, toggleAdvanced, setProjectRoots } = useSettingsStore();
+  const loadProjects = useProjectsStore((state) => state.loadProjects);
   const bridgeStatus = useProjectsStore((state) => state.bridgeStatus);
   const loadingProjects = useProjectsStore((state) => state.loadingProjects);
   const projectError = useProjectsStore((state) => state.projectError);
@@ -78,14 +79,15 @@ export function SettingsPage() {
     return !rootsAreEqual(normalizedDraftState.normalizedRoots, settings.projectRoots);
   }, [normalizedDraftState, settings.projectRoots]);
 
-  const saveProjectRoots = () => {
+  const saveProjectRoots = async () => {
     if (!hasNormalizedRoots(normalizedDraftState)) {
       setProjectRootsMessage(normalizedDraftState.error);
       return;
     }
 
     setProjectRoots(normalizedDraftState.normalizedRoots);
-    setProjectRootsMessage('Saved. The Projects page refreshes from this root list and clears stale project state before reloading.');
+    setProjectRootsMessage('Saved. Projects are refreshing now from the new root list.');
+    await loadProjects();
   };
 
   return (
@@ -114,10 +116,10 @@ export function SettingsPage() {
         </div>
       </Panel>
       <div className="space-y-4">
-        <Panel title="Project roots" subtitle="Configured roots drive what the Projects page initializes and reloads.">
+        <Panel title="Project roots" subtitle="Configured roots drive the Projects list and refresh immediately when saved.">
           <div className="space-y-3">
             <div className="rounded-md border border-app-border bg-app-panelAlt p-3 text-xs text-app-muted">
-              Save Windows or WSL repo roots here. Changing this list refreshes the Projects workflow against the new root set and clears stale project/file state first.
+              Save Windows or WSL repo roots here. Saving refreshes Projects immediately and clears stale project, tab, file, and change state first.
             </div>
             <div className="space-y-2">
               {projectRootDrafts.map((root, index) => (
@@ -208,7 +210,7 @@ export function SettingsPage() {
               <span>{settings.advanced.telemetry ? 'On' : 'Off'}</span>
             </button>
             <div className="rounded-md border border-app-border bg-app-panelAlt p-3 text-xs text-app-muted">
-              {loadingProjects ? 'Projects are refreshing for the active root/runtime settings.' : 'Projects reload automatically when you save a new root list.'}
+              {loadingProjects ? 'Projects are refreshing for the active root/runtime settings.' : 'Saving a new root list refreshes Projects immediately.'}
               {projectError ? <p className="mt-2 text-app-danger">Latest Projects status: {projectError}</p> : null}
             </div>
           </div>
