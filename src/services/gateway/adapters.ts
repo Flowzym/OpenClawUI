@@ -1,5 +1,5 @@
 import type { LogEntry, Message, RunInfo, RunStatus, Session, SessionMetadata, ToolEvent } from '../../types';
-import type { GatewayEvent, ProtocolConfidence } from './types';
+import type { GatewayEvent, ProtocolConfidence, ProtocolParseCategory } from './types';
 
 const DEFAULT_METADATA: SessionMetadata = {
   agent: 'unknown',
@@ -11,6 +11,7 @@ const DEFAULT_METADATA: SessionMetadata = {
 
 interface ParseContext {
   confidence: ProtocolConfidence;
+  parseCategory: ProtocolParseCategory;
   note?: string;
   raw: unknown;
   verificationSignal?: 'explicit_ack' | 'explicit_verified_flag' | 'heartbeat';
@@ -47,7 +48,7 @@ const determineVerification = (eventType: string, record: Record<string, unknown
     };
   }
 
-  if (['gateway_ready', 'handshake_ack', 'handshake_ready', 'ready'].includes(eventType)) {
+  if (['gateway_ready', 'handshake_ack', 'handshake_ready'].includes(eventType)) {
     return {
       confidence: 'verified' as const,
       verificationSignal: 'explicit_ack' as const,
@@ -263,6 +264,7 @@ const createRawDiagnostic = (context: ParseContext, summary: string): GatewayEve
   summary,
   source: 'gateway',
   confidence: context.confidence,
+  parseCategory: context.parseCategory,
   note: context.note,
   raw: context.raw,
   verificationSignal: context.verificationSignal,
@@ -278,6 +280,7 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
         message: 'Gateway message was not an object.',
         raw,
         confidence: 'exploratory',
+        parseCategory: 'parse_failure',
       },
     ];
   }
@@ -288,6 +291,7 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   const confidence = verification.confidence;
   const context: ParseContext = {
     confidence,
+    parseCategory: confidence === 'verified' ? 'verified_parse' : 'exploratory_parse',
     raw,
     verificationSignal: verification.verificationSignal,
     note:
@@ -299,8 +303,8 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   if (eventType === 'log') {
     const entry = tryNormalizeLog(record);
     return entry
-      ? [{ type: 'log', entry, confidence, note: context.note, raw }]
-      : [{ type: 'error', kind: 'parse_failure', message: 'Unable to parse gateway log event.', raw, confidence }];
+      ? [{ type: 'log', entry, confidence, parseCategory: context.parseCategory, note: context.note, raw }]
+      : [{ type: 'error', kind: 'parse_failure', message: 'Unable to parse gateway log event.', raw, confidence, parseCategory: 'parse_failure' }];
   }
 
   if (eventType === 'heartbeat' || eventType === 'pong') {
@@ -311,6 +315,7 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
         lastHeartbeat: firstString(record, ['timestamp', 'created_at']) ?? new Date().toISOString(),
         latencyMs: firstNumber(record, ['latency_ms', 'latencyMs']) ?? null,
         confidence: 'exploratory',
+        parseCategory: 'exploratory_parse',
         note: 'Heartbeat/pong observed from gateway transport; handshake remains unverified without an explicit acknowledgement.',
         raw,
         protocolConfidence: 'exploratory',
@@ -328,22 +333,25 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
   if (sessionsPayload && ['session_snapshot', 'sessions_snapshot'].includes(eventType)) {
     const sessions = sessionsPayload.map(normalizeSession).filter((session): session is Session => Boolean(session));
     if (sessions.length > 0) {
-      return [{ type: 'sessions_snapshot', sessions, source: 'gateway', confidence, note: context.note, raw }];
+      return [{ type: 'sessions_snapshot', sessions, source: 'gateway', confidence, parseCategory: context.parseCategory, note: context.note, raw }];
     }
-    return [{ type: 'error', kind: 'parse_failure', message: 'Session snapshot event contained no recognizable sessions.', raw, confidence }];
+    return [{ type: 'error', kind: 'parse_failure', message: 'Session snapshot event contained no recognizable sessions.', raw, confidence, parseCategory: 'parse_failure' }];
   }
 
   if (eventType === 'run' || eventType === 'run_updated' || eventType === 'current_run') {
     const runCandidate = normalizeRun(payload.run ?? payload.current_run ?? payload.currentRun ?? payload);
     if (runCandidate || payload.run === null || payload.current_run === null || payload.currentRun === null) {
-      return [{ type: 'run', run: runCandidate, confidence, note: context.note, raw }];
+      return [{ type: 'run', run: runCandidate, confidence, parseCategory: context.parseCategory, note: context.note, raw }];
     }
-    return [{ type: 'error', kind: 'parse_failure', message: 'Run event was present but did not contain a recognizable run payload.', raw, confidence }];
+    return [{ type: 'error', kind: 'parse_failure', message: 'Run event was present but did not contain a recognizable run payload.', raw, confidence, parseCategory: 'parse_failure' }];
   }
 
-  const sessionCandidate = normalizeSession(payload.session ?? (eventType === 'session_updated' ? payload : null));
+  const sessionCandidate = normalizeSession(
+    payload.session ??
+      (eventType === 'session_updated' || eventType === 'session_created' || eventType === 'session' ? payload : null),
+  );
   if (sessionCandidate) {
-    return [{ type: 'session', session: sessionCandidate, source: 'gateway', confidence, note: context.note, raw }];
+    return [{ type: 'session', session: sessionCandidate, source: 'gateway', confidence, parseCategory: context.parseCategory, note: context.note, raw }];
   }
 
   const sessionId = firstString(payload, ['session_id', 'sessionId']) ?? firstString(record, ['session_id', 'sessionId']);
@@ -369,13 +377,14 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
             clientRequestId,
             clientMessageId,
             confidence,
+            parseCategory: context.parseCategory,
             note: context.note,
             raw,
             verificationSignal: context.verificationSignal,
           },
         ];
       }
-      return [{ type: 'error', kind: 'parse_failure', message: 'Message delta event missing delta content.', raw, confidence }];
+      return [{ type: 'error', kind: 'parse_failure', message: 'Message delta event missing delta content.', raw, confidence, parseCategory: 'parse_failure' }];
     }
 
     if (eventType === 'tool_event') {
@@ -389,12 +398,13 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
             toolEvent,
             source: 'gateway',
             confidence,
+            parseCategory: context.parseCategory,
             note: context.note,
             raw,
           },
         ];
       }
-      return [{ type: 'error', kind: 'parse_failure', message: 'Tool event payload was incomplete.', raw, confidence }];
+      return [{ type: 'error', kind: 'parse_failure', message: 'Tool event payload was incomplete.', raw, confidence, parseCategory: 'parse_failure' }];
     }
 
     if (eventType === 'message' || eventType === 'message_created' || eventType === 'message_updated') {
@@ -411,20 +421,26 @@ export const parseGatewayMessage = (raw: unknown): GatewayEvent[] => {
             clientRequestId,
             clientMessageId,
             confidence,
+            parseCategory: context.parseCategory,
             note: context.note,
             raw,
             verificationSignal: context.verificationSignal,
           },
         ];
       }
-      return [{ type: 'error', kind: 'parse_failure', message: 'Message event was present but could not be normalized safely.', raw, confidence }];
+      return [{ type: 'error', kind: 'parse_failure', message: 'Message event was present but could not be normalized safely.', raw, confidence, parseCategory: 'parse_failure' }];
     }
   }
 
   const logEntry = tryNormalizeLog(record);
   if (logEntry) {
-    return [{ type: 'log', entry: logEntry, confidence, note: context.note, raw }];
+    return [{ type: 'log', entry: logEntry, confidence, parseCategory: context.parseCategory, note: context.note, raw }];
   }
 
-  return [createRawDiagnostic(context, `Unknown gateway payload preserved for diagnostics: ${summarizeRawPayload(raw)}`)];
+  return [
+    createRawDiagnostic(
+      { ...context, parseCategory: 'unknown_raw' },
+      `Unknown gateway payload preserved for diagnostics: ${summarizeRawPayload(raw)}`,
+    ),
+  ];
 };

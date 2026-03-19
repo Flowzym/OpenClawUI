@@ -19,6 +19,19 @@ export const mockGatewayClient: GatewayClient = {
 
     return () => window.clearInterval(timer);
   },
+  subscribeTrace(callback) {
+    callback({
+      id: 'mock-trace-initial',
+      direction: 'inbound',
+      recordedAt: new Date().toISOString(),
+      summary: 'mock gateway trace entry',
+      handshakePhase: 'ready',
+      confidence: 'exploratory',
+      parseCategory: 'exploratory_parse',
+      payloadSummary: 'Mock gateway client active.',
+    });
+    return () => undefined;
+  },
   async getCurrentRun() {
     return mockCurrentRun;
   },
@@ -62,6 +75,7 @@ export const mockGatewayClient: GatewayClient = {
       diagnostics: ['Mock gateway client active.'],
       lastError: undefined,
       protocolConfidence: 'exploratory',
+      protocolTrace: [],
     };
   },
 };

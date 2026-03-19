@@ -102,6 +102,28 @@ The app uses separate Zustand stores to keep operator concerns isolated and easy
 - Protocol confidence: partial. The UI distinguishes `verified` signals from exploratory heuristics instead of assuming readiness from any recognized event name.
 - File service: runtime-aware. `src/services/files/` probes the local Vite bridge explicitly, uses the bridge only when it identifies itself as `local-dev-bridge`, and otherwise enters an explicit mock fallback mode.
 
+## Gateway protocol status
+
+Verified inbound signals today:
+
+- Explicit handshake acknowledgements named `gateway_ready`, `handshake_ack`, or `handshake_ready`.
+- Payloads that carry `protocol_verified: true` or `verified: true`.
+- Those explicit signals are the only paths that promote the gateway handshake to `ready` / `verified`.
+
+Still exploratory outbound commands:
+
+- Handshake/init guesses: `gateway.connect`, fallback `connect`.
+- Subscription/session/run guesses: `subscribe`, `sessions.list`, `run.current`, `run.stop`.
+- Message send guesses: primary `session.message`, fallback `send_message`.
+- Transport liveness guess: application-level `ping`.
+
+How to test locally:
+
+1. Run `npm run dev`.
+2. Point Settings → gateway URL at a local OpenClaw gateway such as `ws://127.0.0.1:18789`.
+3. Open **Logs** and watch the protocol trace for outbound command notes, inbound payload summaries, parse category (`verified_parse`, `exploratory_parse`, `unknown_raw`, `parse_failure`), confidence, and handshake phase.
+4. Treat any successful session/message flow without an explicit handshake acknowledgement as exploratory, not verified.
+
 ## Replacing mocks with real integrations
 
 All integration boundaries are isolated behind service modules:
