@@ -1,37 +1,44 @@
 import { create } from 'zustand';
-import { mockChanges } from '../data/mockData';
-import type { ChangeItem } from '../types';
+import { useProjectsStore } from './projectsStore';
 
 interface ChangesStore {
-  changes: ChangeItem[];
   selectedChangeId: string;
   selectChange: (changeId: string) => void;
-  acceptChange: (changeId: string) => void;
+  acceptChange: (changeId: string) => Promise<void>;
   rejectChange: (changeId: string) => void;
-  savePatch: () => void;
+  savePatch: () => Promise<void>;
 }
 
+const findChange = (changeId: string) => useProjectsStore.getState().changes.find((change) => change.id === changeId);
+
 export const useChangesStore = create<ChangesStore>((set) => ({
-  changes: mockChanges,
-  selectedChangeId: mockChanges[0]?.id ?? '',
+  selectedChangeId: '',
   selectChange: (changeId) => set({ selectedChangeId: changeId }),
-  acceptChange: (changeId) =>
-    set((state) => ({
-      changes: state.changes.map((change) =>
-        change.id === changeId ? { ...change, summary: `${change.summary} (accepted in mock workflow)` } : change,
-      ),
-    })),
-  rejectChange: (changeId) =>
-    set((state) => ({
-      changes: state.changes.map((change) =>
-        change.id === changeId ? { ...change, summary: `${change.summary} (rejected in mock workflow)` } : change,
-      ),
-    })),
-  savePatch: () =>
-    set((state) => ({
-      changes: state.changes.map((change) => ({
-        ...change,
-        summary: `${change.summary} (saved locally in mock workflow)`,
-      })),
-    })),
+  async acceptChange(changeId) {
+    const change = findChange(changeId);
+    if (!change?.projectId) return;
+
+    const projectsState = useProjectsStore.getState();
+    if (projectsState.selectedProjectId !== change.projectId) {
+      await projectsState.selectProject(change.projectId);
+    }
+    await useProjectsStore.getState().saveFile(change.filePath);
+  },
+  rejectChange(changeId) {
+    const change = findChange(changeId);
+    if (!change?.projectId) return;
+
+    const projectsState = useProjectsStore.getState();
+    if (projectsState.selectedProjectId !== change.projectId) {
+      void projectsState.selectProject(change.projectId).then(() => {
+        useProjectsStore.getState().resetFile(change.filePath);
+      });
+      return;
+    }
+
+    projectsState.resetFile(change.filePath);
+  },
+  async savePatch() {
+    await useProjectsStore.getState().saveDirtyFiles();
+  },
 }));
