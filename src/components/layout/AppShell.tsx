@@ -7,15 +7,18 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { useLogsStore } from '../../stores/logsStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useProjectsStore } from '../../stores/projectsStore';
 
 export function AppShell() {
   const theme = useSettingsStore((state) => state.settings.theme);
   const gatewayUrl = useSettingsStore((state) => state.settings.gatewayUrl);
+  const projectRoots = useSettingsStore((state) => state.settings.projectRoots);
   const initializeConnection = useConnectionStore((state) => state.initialize);
   const connectGateway = useConnectionStore((state) => state.connect);
   const disconnectGateway = useConnectionStore((state) => state.disconnect);
   const initializeSessions = useSessionStore((state) => state.initialize);
   const startLogStream = useLogsStore((state) => state.startStream);
+  const loadProjects = useProjectsStore((state) => state.loadProjects);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -36,6 +39,10 @@ export function AppShell() {
   useEffect(() => {
     void connectGateway(gatewayUrl);
   }, [connectGateway, gatewayUrl]);
+
+  useEffect(() => {
+    void loadProjects();
+  }, [loadProjects, projectRoots]);
 
   useEffect(() => () => {
     void disconnectGateway();
